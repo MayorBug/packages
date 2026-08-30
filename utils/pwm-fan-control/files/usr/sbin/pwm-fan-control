@@ -1,0 +1,83 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 Georg Seema <georgseema@gmail.com>
+
+set -eu
+
+SELF=${PWM_FAN_SELF:-$0}
+LIB_DIR=${PWM_FAN_LIB_DIR:-/usr/lib/pwm-fan}
+. "$LIB_DIR/common.sh"
+. "$LIB_DIR/config.sh"
+. "$LIB_DIR/hardware.sh"
+. "$LIB_DIR/policy.sh"
+. "$LIB_DIR/modem.sh"
+. "$LIB_DIR/fan_watch.sh"
+. "$LIB_DIR/control.sh"
+. "$LIB_DIR/runtime.sh"
+CONFIG_FILE=${PWM_FAN_CONFIG_FILE:-/etc/pwm-fan.conf}
+PROC_UPTIME=${PWM_FAN_UPTIME_FILE:-/proc/uptime}
+RUN_DIR=${PWM_FAN_RUN_DIR:-/var/run/pwm-fan-control}
+STATUS_FILE=${PWM_FAN_STATUS_FILE:-$RUN_DIR/status.json}
+HISTORY_FILE=${PWM_FAN_HISTORY_FILE:-$RUN_DIR/history.tsv}
+HISTORY_LOCK=${PWM_FAN_HISTORY_LOCK:-$RUN_DIR/history.lock}
+LOCK_DIR=${PWM_FAN_LOCK_DIR:-$RUN_DIR/daemon.lock}
+MODEM_SAMPLE_FILE=${PWM_FAN_MODEM_SAMPLE_FILE:-$RUN_DIR/modem.sample}
+LOGGER=${PWM_FAN_LOGGER:-logger}
+. "$LIB_DIR/daemon.sh"
+. "$LIB_DIR/api.sh"
+
+usage()
+{
+	cat <<'USAGE'
+Usage:
+  pwm-fan-control run [-c FILE]
+  pwm-fan-control validate -c FILE --json
+  pwm-fan-control probe -c FILE --json
+  pwm-fan-control config-json
+  pwm-fan-control config-install -c FILE --expect REVISION
+  pwm-fan-control config-set KEY VALUE
+  pwm-fan-control config-reset --expect REVISION
+  pwm-fan-control status-json
+  pwm-fan-control clear-history
+  pwm-fan-control help
+
+Configuration: /etc/pwm-fan.conf
+Service:       /etc/init.d/pwm-fan-control
+USAGE
+}
+
+die()
+{
+	printf 'pwm-fan-control: %s\n' "$*" >&2
+	return 1
+}
+
+main()
+{
+	local command=${1:-help}
+	[ "$#" -eq 0 ] || shift
+	case $command in
+		run) parse_config_option "$@" && run_controller ;;
+		modem-run) parse_config_option "$@" && run_modem_sampler ;;
+		modem-enabled) parse_config_option "$@" && parse_config "$CONFIG_FILE" && config_validate && [ "$CFG_MODE" != disabled ] && [ "$CFG_MODEM_SOURCE" != off ] ;;
+		config-upgrade)
+			[ "$#" -eq 0 ] || return 1
+			if config_upgrade_v1 "$CONFIG_FILE"; then
+				log_event info configuration_upgraded 'from=1 to=2 reset=temperature_filter'
+			else
+				[ "$?" -eq 2 ]
+			fi ;;
+		validate) parse_validate_options "$@" && config_document_json "$VALIDATE_FILE" ;;
+		probe) parse_validate_options "$@" && probe_json "$VALIDATE_FILE" ;;
+		config-json) [ "$#" -eq 0 ] && config_document_json "$CONFIG_FILE" ;;
+		config-install) run_config_install "$@" ;;
+		config-set) [ "$#" -eq 2 ] && config_set "$1" "$2" "$CONFIG_FILE" ;;
+		config-reset) run_config_reset "$@" ;;
+		status-json) [ "$#" -eq 0 ] && status_json ;;
+		clear-history) [ "$#" -eq 0 ] && history_clear ;;
+		help|-h|--help) [ "$#" -eq 0 ] || { usage >&2; return 1; }; usage ;;
+		*) usage >&2; return 1 ;;
+	esac
+}
+
+main "$@"
