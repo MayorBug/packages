@@ -26,6 +26,7 @@ ACTIVE_FAULT=none
 HISTORY_STATE=healthy
 HISTORY_NEXT_UPTIME=0
 HARDWARE_NEXT_DISCOVERY=0
+KERNEL_MONITOR_ONLY=0
 SNAP_TIMESTAMP=0
 SNAP_UPDATED_UPTIME=0
 SNAP_STATE=starting
@@ -116,11 +117,13 @@ hardware_check()
 	hardware_state_reset
 	policy_state_reset
 	hardware_discover || { die "hardware discovery failed: $HW_DISCOVERY_ERROR"; return 1; }
-	policy_build || {
+	if ! policy_build; then
 		HW_DISCOVERY_ERROR=kernel_policy_invalid
-		die "kernel thermal policy could not be parsed"
-		return 1
-	}
+		[ -r "$HW_THERMAL/temp" ] || { die "CPU temperature is not readable"; return 1; }
+		KERNEL_MONITOR_ONLY=1
+		return 0
+	fi
+	KERNEL_MONITOR_ONLY=0
 	[ -r "$HW_THERMAL/temp" ] || { die "CPU temperature is not readable"; return 1; }
 	case $CFG_MODE in auto|curve|manual)
 		[ -w "$HW_HWMON/pwm1" ] || { die "PWM output is not writable"; return 1; } ;;
@@ -129,7 +132,8 @@ hardware_check()
 
 write_full_output()
 {
-	pwm_force_full >/dev/null 2>&1 || true
+	[ -n "${POLICY_FULL_PWM:-}" ] || return 1
+	pwm_force_full "$POLICY_FULL_PWM" >/dev/null 2>&1
 }
 
 record_pwm_recovery()
@@ -185,7 +189,8 @@ telemetry_with_rediscovery()
 control_step()
 {
 	local now cpu selected filtered modem=null selected_source=cpu
-	local requested_pwm= effective_pwm= expected_pwm= raw=null rpm=null state=running reason=none full_output=1
+	local requested_pwm= requested_demand= effective_pwm= effective_demand= expected_pwm= actual_demand=
+	local raw=null rpm=null state=running reason=none full_output=1
 	local previous_fan previous_modem
 	SELECTED_TEMPERATURE_SOURCE=null
 	now=$(read_uptime) || return 1
@@ -196,7 +201,7 @@ control_step()
 				"${HW_ACTUAL_PWM:-null}" "${HW_RPM:-null}"
 		else
 			write_full_output
-			snapshot_set failsafe temperature_unavailable null null null null null 255 \
+			snapshot_set failsafe temperature_unavailable null null null null null "${POLICY_FULL_PWM:-null}" \
 				"${HW_ACTUAL_PWM:-null}" "${HW_RPM:-null}"
 		fi
 		status_write_tracked || true
@@ -214,6 +219,13 @@ control_step()
 			;;
 		esac
 	fi
+	if [ "$KERNEL_MONITOR_ONLY" -eq 1 ]; then
+		snapshot_set error kernel_policy_invalid "$cpu" null null "$modem" \
+			null null "${HW_ACTUAL_PWM:-null}" "${HW_RPM:-null}"
+		status_write_tracked || true
+		history_record_if_due "$now" || true
+		return 0
+	fi
 	if [ "$previous_modem" = waiting ] && [ "$MODEM_STATE" = available ]; then
 		log_event info modem_temperature_available "source=$CFG_MODEM_SOURCE temperature_millic=$MODEM_TEMPERATURE_MILLIC"
 	elif [ "$previous_modem" = available ] && [ "$MODEM_STATE" = lost ]; then
@@ -229,7 +241,7 @@ control_step()
 		else
 			write_full_output
 			snapshot_set failsafe kernel_policy_unavailable "$cpu" "$selected" null "$modem" \
-				null 255 "${HW_ACTUAL_PWM:-null}" "${HW_RPM:-null}"
+				null "${POLICY_FULL_PWM:-null}" "${HW_ACTUAL_PWM:-null}" "${HW_RPM:-null}"
 		fi
 		status_write_tracked || true
 		history_record_if_due "$now" || true
@@ -247,26 +259,30 @@ control_step()
 		HW_REQUESTED_PWM=$POLICY_FLOOR_PWM
 		HW_PWM_STATE=applied
 	else
-		effective_pwm=$requested_pwm
-		[ "$effective_pwm" -ge "$POLICY_FLOOR_PWM" ] || effective_pwm=$POLICY_FLOOR_PWM
+		requested_demand=$requested_pwm
+		requested_pwm=$(policy_demand_to_pwm "$requested_demand") || return 1
+		effective_demand=$requested_demand
+		[ "$effective_demand" -ge "$POLICY_FLOOR_DEMAND" ] || effective_demand=$POLICY_FLOOR_DEMAND
+		effective_pwm=$(policy_demand_to_pwm "$effective_demand") || return 1
 		if ! pwm_apply_verified "$effective_pwm"; then
-			pwm_force_full || true
-			state=failsafe; reason=pwm_write_failed; effective_pwm=255
+			pwm_force_full "$POLICY_FULL_PWM" || true
+			state=failsafe; reason=pwm_write_failed; effective_pwm=$POLICY_FULL_PWM
 		fi
 	fi
 	previous_fan=$FANWATCH_STATE
+	actual_demand=$(policy_pwm_to_demand "${HW_ACTUAL_PWM:-}" 2>/dev/null || true)
 	if [ "$ACTIVE_MODE" = kernel ]; then
-		fan_watch_update "$now" "${HW_ACTUAL_PWM:-0}" "${HW_ACTUAL_PWM:-}" \
-			"$([ -n "${HW_ACTUAL_PWM:-}" ] && printf applied || printf unavailable)" \
+		fan_watch_update "$now" "${actual_demand:-0}" "$actual_demand" \
+			"$([ -n "$actual_demand" ] && printf applied || printf unavailable)" \
 			"${HW_RPM:-}" "$HW_TACH_STATE" || true
 	else
-		fan_watch_update "$now" "${HW_REQUESTED_PWM:-$POLICY_FLOOR_PWM}" "${HW_ACTUAL_PWM:-}" \
+		fan_watch_update "$now" "${effective_demand:-255}" "$actual_demand" \
 			"$HW_PWM_STATE" "${HW_RPM:-}" "$HW_TACH_STATE" || true
 	fi
 	record_fan_transition "$previous_fan"
 	if [ "$FANWATCH_STATE" = fan_failed ] && [ "$ACTIVE_MODE" != kernel ]; then
-		pwm_force_full || true
-		state=failsafe; reason=fan_stopped; effective_pwm=255
+		pwm_force_full "$POLICY_FULL_PWM" || true
+		state=failsafe; reason=fan_stopped; effective_pwm=$POLICY_FULL_PWM
 	fi
 	raw=${HW_ACTUAL_PWM:-null}; rpm=${HW_RPM:-null}
 	snapshot_set "$state" "$reason" "$cpu" "$selected" "$filtered" "$modem" \
@@ -284,7 +300,8 @@ reload_config()
 	local previous_mode previous_manual_timeout previous_config previous_hwmon_name previous_thermal_zone
 	local old_pid old_filter old_curve old_modem old_fan old_paths
 	local old_hwmon old_hwmon_device old_thermal old_thermal_node old_cooling old_fan_node old_tach old_discovery
-	local old_policy_available old_policy_levels old_policy_points old_policy_max old_policy_state old_policy_floor
+	local old_policy_available old_policy_levels old_policy_points old_policy_max old_policy_direction old_policy_full
+	local old_policy_state old_policy_floor old_policy_floor_demand
 	local now candidate_mode
 	previous_mode=$ACTIVE_MODE
 	previous_manual_timeout=$CFG_MANUAL_TIMEOUT_MIN
@@ -302,7 +319,9 @@ reload_config()
 	old_discovery=$HW_DISCOVERY_ERROR
 	old_policy_available=$POLICY_AVAILABLE; old_policy_levels=$POLICY_LEVELS
 	old_policy_points=$POLICY_POINTS; old_policy_max=$POLICY_MAX_STATE
+	old_policy_direction=$POLICY_DIRECTION; old_policy_full=$POLICY_FULL_PWM
 	old_policy_state=$POLICY_STATE; old_policy_floor=$POLICY_FLOOR_PWM
+	old_policy_floor_demand=$POLICY_FLOOR_DEMAND
 	previous_config=$(config_render) || return 1
 	if ! parse_config "$CONFIG_FILE" || ! validate_config; then
 		restore_active_config "$previous_config" || return 1
@@ -334,7 +353,9 @@ reload_config()
 			HW_DISCOVERY_ERROR=$old_discovery
 			POLICY_AVAILABLE=$old_policy_available; POLICY_LEVELS=$old_policy_levels
 			POLICY_POINTS=$old_policy_points; POLICY_MAX_STATE=$old_policy_max
+			POLICY_DIRECTION=$old_policy_direction; POLICY_FULL_PWM=$old_policy_full
 			POLICY_STATE=$old_policy_state; POLICY_FLOOR_PWM=$old_policy_floor
+			POLICY_FLOOR_DEMAND=$old_policy_floor_demand
 			write_full_output
 			log_event error kernel_handoff_failed
 			return 1
@@ -421,7 +442,7 @@ run_loop()
 		if [ "$ACTIVE_MODE" = manual ] && [ "$CFG_MANUAL_TIMEOUT_MIN" -gt 0 ]; then
 			now=$(read_uptime)
 			if [ $((now - MANUAL_START_UPTIME)) -ge $((CFG_MANUAL_TIMEOUT_MIN * 60)) ]; then
-				if replace_mode_with_kernel && perform_handoff; then
+				if perform_handoff && replace_mode_with_kernel; then
 					CFG_MODE=kernel
 					ACTIVE_MODE=kernel
 					log_event info manual_timeout 'mode=kernel'
@@ -467,6 +488,29 @@ cleanup()
 	exit "$exit_status"
 }
 
+acquire_controller_lock()
+{
+	local lock_pid
+	mkdir -p "$RUN_DIR" || return 1
+	if ! mkdir "$LOCK_DIR" 2>/dev/null; then
+		lock_pid=$(read_uint "$LOCK_DIR/pid" 2>/dev/null || printf '0\n')
+		if [ "$lock_pid" -gt 1 ] && kill -0 "$lock_pid" 2>/dev/null; then
+			die "another controller instance is running"
+			return 1
+		fi
+		rm -f "$LOCK_DIR/pid"
+		rmdir "$LOCK_DIR" 2>/dev/null || { die "controller lock is unavailable"; return 1; }
+		mkdir "$LOCK_DIR" || return 1
+	fi
+	printf '%s\n' "$$" > "$LOCK_DIR/pid"
+}
+
+release_startup_lock()
+{
+	rm -f "$LOCK_DIR/pid"
+	rmdir "$LOCK_DIR" 2>/dev/null || true
+}
+
 run_controller()
 {
 	if ! parse_config "$CONFIG_FILE" || ! validate_config; then
@@ -483,27 +527,21 @@ run_controller()
 		log_event error controller_start_failed "reason=${HW_DISCOVERY_ERROR:-hardware_unavailable}"
 		return 1
 	fi
+	acquire_controller_lock || return 1
 	modem_sample_reset
 	fan_watch_reset
-	if [ "$CFG_MODE" = kernel ]; then
+	if [ "$KERNEL_MONITOR_ONLY" -eq 1 ]; then
+		ACTIVE_MODE=kernel
+		HANDOFF_ON_EXIT=0
+		log_event warning kernel_monitor_fallback "reason=kernel_policy_invalid configured_mode=$CFG_MODE"
+	elif [ "$CFG_MODE" = kernel ]; then
 		if ! perform_handoff; then
 			log_event error controller_start_failed 'reason=kernel_handoff_failed'
+			release_startup_lock
 			return 1
 		fi
 		HANDOFF_ON_EXIT=0
 	fi
-	mkdir -p "$RUN_DIR" || return 1
-	if ! mkdir "$LOCK_DIR" 2>/dev/null; then
-		lock_pid=$(read_uint "$LOCK_DIR/pid" 2>/dev/null || printf '0\n')
-		if [ "$lock_pid" -gt 1 ] && kill -0 "$lock_pid" 2>/dev/null; then
-			die "another controller instance is running"
-			return 1
-		fi
-		rm -f "$LOCK_DIR/pid"
-		rmdir "$LOCK_DIR" 2>/dev/null || { die "controller lock is unavailable"; return 1; }
-		mkdir "$LOCK_DIR" || return 1
-	fi
-	printf '%s\n' "$$" > "$LOCK_DIR/pid"
 	RUNNING=1
 	trap cleanup EXIT
 	trap handle_hup HUP

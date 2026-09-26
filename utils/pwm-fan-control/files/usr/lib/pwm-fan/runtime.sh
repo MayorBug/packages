@@ -74,6 +74,9 @@ status_write()
 		fi
 		printf "  \"filtered_temperature_millic\":%s,\n" "$SNAP_FILTERED"
 		printf "  \"requested_pwm\":%s,\n" "$SNAP_REQUESTED_PWM"
+		printf "  \"kernel_policy_direction\":"
+		if [ -n "${POLICY_DIRECTION:-}" ]; then printf '"%s",\n' "$POLICY_DIRECTION"; else printf 'null,\n'; fi
+		printf "  \"kernel_strongest_pwm\":%s,\n" "${POLICY_FULL_PWM:-null}"
 		printf "  \"kernel_floor_state\":%s,\n" "${POLICY_STATE:-null}"
 		printf "  \"kernel_floor_pwm\":%s,\n" "${POLICY_FLOOR_PWM:-null}"
 		printf "  \"effective_pwm\":%s,\n" "$SNAP_EFFECTIVE_PWM"

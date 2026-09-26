@@ -204,8 +204,11 @@ pwm-fan-control probe -c FILE --json
 hardware access.
 
 `probe` first requires valid config, then performs one read-only discovery and
-DTS-policy parse. It reports whether the valid config applies to the present
-hardware. It never writes PWM or changes service state.
+DTS-policy parse. It reports userspace-control applicability separately from
+read-only observation availability. When discovery succeeds but policy
+normalization fails, it still returns safe CPU/PWM/RPM telemetry with
+`observation_available=true` and `applicable=false`. It never writes PWM or
+changes service state.
 
 ## Config revision
 

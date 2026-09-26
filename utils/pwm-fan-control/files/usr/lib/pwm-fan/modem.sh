@@ -18,7 +18,7 @@ modem_qmanager_once()
 	response=$directory/.pwm-fan-qmanager.$$
 	fields=$directory/.pwm-fan-qmanager-fields.$$
 	(umask 077; : > "$response") || return 1
-	if ! (ulimit -f 128; "$timeout" 5 "$client" -q --no-check-certificate -O "$response" \
+	if ! (trap '' XFSZ; ulimit -c 0; ulimit -f 128; "$timeout" 5 "$client" -q --no-check-certificate -O "$response" \
 		"http://$CFG_MODEM_HTTP_HOST/cgi-bin/quecmanager/public/overview.sh" 2>/dev/null); then
 		rm -f "$response"; return 1
 	fi
@@ -58,7 +58,7 @@ modem_quectel_once()
 	directory=${PWM_FAN_MODEM_TMP_DIR:-/tmp}
 	response_file=$directory/.pwm-fan-at.$$
 	(umask 077; : > "$response_file") || return 1
-	if ! (ulimit -f 128; "$timeout" 5 sh -c '
+	if ! (trap '' XFSZ; ulimit -c 0; ulimit -f 128; "$timeout" 5 sh -c '
 		device=$1
 		exec 3<>"$device" || exit 1
 		printf "AT+QTEMP\r" >&3 || exit 1

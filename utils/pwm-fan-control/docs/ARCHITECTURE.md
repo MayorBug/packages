@@ -54,11 +54,17 @@ an older sample and continues with CPU temperature. It uses modem data again
 when the sampler publishes a fresh sample.
 
 Kernel mode gives control to the kernel once. It then reads the hardware but
-does not write PWM. Disabled mode does not find or access hardware. It leaves
-no persistent controller or modem process.
+does not write PWM. If startup discovers the fan and CPU sensor but cannot
+normalize the kernel policy safely, the saved mode is preserved while the
+runtime enters a degraded Kernel observer. That fallback never writes PWM and
+continues publishing temperature, actual PWM, optional RPM, status, and history.
+Disabled mode does not find or access hardware. It leaves no persistent
+controller or modem process.
 
-A normal stop gives control back to the Linux thermal policy. If the process
-crashes, the kernel `pwm-fan` implementation remains the hardware fallback.
+A normal stop gives control back to the Linux thermal policy. After an
+untrappable crash, the design relies on the target kernel `pwm-fan`
+implementation resuming as the hardware fallback; this is a platform assumption
+that requires device validation.
 
 ## Module ownership
 
@@ -82,11 +88,14 @@ The client must not show stale output as current output.
 
 ## Safety order
 
-The CPU sensor and kernel thermal policy are required. Modem data and history
-are optional.
+The CPU sensor is required for every running role. A normalized kernel thermal
+policy is required before userspace may write PWM. If normalization fails at
+startup, the kernel retains ownership and the daemon is limited to read-only
+observation. Modem data and history are optional.
 
-Auto, Curve, and Manual cannot request less output than the kernel floor. A
-required sensor, policy, or PWM error requests the highest available output.
+Auto, Curve, and Manual cannot request less cooling than the kernel floor. A
+required sensor, live policy, or PWM error in an established control role
+requests the strongest output derived from the last validated policy.
 
 An optional modem or history error does not stop CPU fan control.
 

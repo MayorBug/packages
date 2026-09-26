@@ -252,7 +252,7 @@ policy_points_json()
 
 probe_json()
 {
-	local file=$1 parse_ok=1 validate_ok=1 applicable=true code=none pwm_readable=false pwm_writable=false
+	local file=$1 parse_ok=1 validate_ok=1 applicable=true observation_available=false code=none pwm_readable=false pwm_writable=false
 	local actual_pwm=null cpu_temperature=null rpm=null tach_state=unknown
 	config_parse "$file" || parse_ok=0
 	config_validate || validate_ok=0
@@ -266,18 +266,22 @@ probe_json()
 	policy_state_reset
 	if ! hardware_discover; then
 		applicable=false; code=$HW_DISCOVERY_ERROR
-	elif ! policy_build; then
-		applicable=false; code=kernel_policy_invalid
+	else
+		observation_available=true
+		if ! policy_build; then
+			applicable=false; code=kernel_policy_invalid
+		fi
 	fi
 	[ -n "$HW_HWMON" ] && [ -r "$HW_HWMON/pwm1" ] && pwm_readable=true
 	[ -n "$HW_HWMON" ] && [ -w "$HW_HWMON/pwm1" ] && pwm_writable=true
-	if [ "$applicable" = true ] && telemetry_read; then
+	if [ "$observation_available" = true ] && telemetry_read; then
 		actual_pwm=${HW_ACTUAL_PWM:-null}
 		cpu_temperature=${HW_CPU_TEMPERATURE_MILLIC:-null}
 		rpm=${HW_RPM:-null}
 		tach_state=$HW_TACH_STATE
 	fi
-	printf '{"contract_version":%s,"valid":true,"applicable":%s,' "$STATUS_VERSION" "$applicable"
+	printf '{"contract_version":%s,"valid":true,"applicable":%s,"observation_available":%s,' \
+		"$STATUS_VERSION" "$applicable" "$observation_available"
 	if [ "$code" = none ]; then printf '"diagnostics":[],'; else
 		printf '"diagnostics":[{"severity":"error","code":"%s"}],' \
 			"$(printf '%s' "$code" | json_escape)"
@@ -290,8 +294,10 @@ probe_json()
 		"$([ -n "$HW_TACH" ] && printf true || printf false)" "$pwm_readable" "$pwm_writable"
 	printf '"actual_pwm":%s,"cpu_temperature_millic":%s,"rpm":%s,"tach_state":"%s"},' \
 		"$actual_pwm" "$cpu_temperature" "$rpm" "$tach_state"
-	printf '"kernel_policy":{"available":%s,"max_state":%s,"points":' \
+	printf '"kernel_policy":{"available":%s,"max_state":%s,"direction":' \
 		"$([ "$POLICY_AVAILABLE" -eq 1 ] && printf true || printf false)" "$POLICY_MAX_STATE"
+	if [ -n "${POLICY_DIRECTION:-}" ]; then printf '"%s"' "$POLICY_DIRECTION"; else printf 'null'; fi
+	printf ',"strongest_pwm":%s,"points":' "${POLICY_FULL_PWM:-null}"
 	policy_points_json
 	printf '}}\n'
 	[ "$applicable" = true ]

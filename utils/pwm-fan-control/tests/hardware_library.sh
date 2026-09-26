@@ -123,12 +123,50 @@ be32 10 > "$thermal_node/cooling-maps/map0/trip"
 be32 20 > "$thermal_node/cooling-maps/map1/trip"
 policy_build
 
-# Use a temporary decreasing DTS list to verify rejection.
+# Mixed electrical polarity cannot be normalized safely.
 { be32 0; be32 255; be32 128; } > "$fan_node/cooling-levels"
 expect_failure policy_build
+pass 'mixed DTS PWM policy is rejected'
+invalid_probe_before=$(cat "$hwmon/pwm1")
+if PWM_FAN_SYS_ROOT=$sys PWM_FAN_RUN_DIR=$TEST_TMP/invalid-probe-run \
+	PWM_FAN_STATUS_FILE=$TEST_TMP/invalid-probe-run/status.json \
+	"$CONTROLLER" probe -c "$DEFAULT_CONFIG" --json > "$TEST_TMP/invalid-probe.json"; then
+	fail 'invalid policy probe unexpectedly reported userspace control applicable'
+fi
+python3 - "$TEST_TMP/invalid-probe.json" "$invalid_probe_before" <<'PY'
+import json, pathlib, sys
+probe = json.loads(pathlib.Path(sys.argv[1]).read_text())
+expected_pwm = int(sys.argv[2])
+assert probe['valid'] is True
+assert probe['applicable'] is False
+assert probe['observation_available'] is True
+assert probe['diagnostics'][0]['code'] == 'kernel_policy_invalid'
+assert probe['hardware']['actual_pwm'] == expected_pwm
+assert probe['hardware']['cpu_temperature_millic'] == 59000
+assert probe['kernel_policy']['available'] is False
+assert probe['kernel_policy']['direction'] is None
+assert probe['kernel_policy']['strongest_pwm'] is None
+PY
+assert_eq "$(cat "$hwmon/pwm1")" "$invalid_probe_before" \
+	'invalid policy probe observes hardware without writing PWM'
+
+# BPI-R3-style PWM is electrically inverted: lower raw values mean stronger cooling.
+{ be32 255; be32 40; be32 0; } > "$fan_node/cooling-levels"
+policy_build
+assert_eq "$POLICY_DIRECTION" descending 'inverted DTS PWM policy is detected'
+assert_eq "$POLICY_FULL_PWM" 0 'inverted policy derives strongest raw PWM from maximum state'
+assert_eq "$POLICY_POINTS" '60000:2000:58000:1:40
+80000:3000:77000:2:0' 'inverted policy preserves raw PWM points in cooling-state order'
+policy_floor_reset
+policy_floor_update 81000
+assert_eq "$POLICY_FLOOR_PWM" 0 'inverted policy floor uses maximum cooling raw PWM'
+assert_eq "$POLICY_FLOOR_DEMAND" 255 'inverted policy floor exposes normalized cooling demand'
+assert_eq "$(policy_demand_to_pwm 128)" 127 'normalized cooling demand converts to inverted raw PWM'
+policy_handoff 81000
+assert_eq "$(cat "$hwmon/pwm1")" 0 'inverted policy handoff writes maximum cooling raw PWM'
+
 { be32 0; be32 128; be32 255; } > "$fan_node/cooling-levels"
 policy_build
-pass 'decreasing DTS PWM policy is rejected'
 
 mkdir -p "$thermal_node/cooling-maps/map2"
 { be32 1; be32 2; be32 2; } > "$thermal_node/cooling-maps/map2/cooling-device"

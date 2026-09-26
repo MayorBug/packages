@@ -7,7 +7,8 @@ hardware_policy_refresh()
 	local old_cooling=$HW_COOLING old_fan_node=$HW_FAN_OF_NODE old_tach=$HW_TACH
 	local old_error=$HW_DISCOVERY_ERROR old_available=$POLICY_AVAILABLE
 	local old_levels=$POLICY_LEVELS old_points=$POLICY_POINTS old_max=$POLICY_MAX_STATE
-	local old_policy_state=$POLICY_STATE old_floor=$POLICY_FLOOR_PWM
+	local old_direction=$POLICY_DIRECTION old_full=$POLICY_FULL_PWM
+	local old_policy_state=$POLICY_STATE old_floor=$POLICY_FLOOR_PWM old_floor_demand=$POLICY_FLOOR_DEMAND
 	if hardware_discover && policy_build; then
 		return 0
 	fi
@@ -23,8 +24,11 @@ hardware_policy_refresh()
 	POLICY_LEVELS=$old_levels
 	POLICY_POINTS=$old_points
 	POLICY_MAX_STATE=$old_max
+	POLICY_DIRECTION=$old_direction
+	POLICY_FULL_PWM=$old_full
 	POLICY_STATE=$old_policy_state
 	POLICY_FLOOR_PWM=$old_floor
+	POLICY_FLOOR_DEMAND=$old_floor_demand
 	return 1
 }
 policy_state_reset()
@@ -33,8 +37,33 @@ policy_state_reset()
 	POLICY_LEVELS=
 	POLICY_POINTS=
 	POLICY_MAX_STATE=0
+	POLICY_DIRECTION=
+	POLICY_FULL_PWM=
 	POLICY_STATE=
 	POLICY_FLOOR_PWM=
+	POLICY_FLOOR_DEMAND=
+}
+
+policy_pwm_to_demand()
+{
+	local pwm=$1
+	is_uint "$pwm" && [ "$pwm" -le 255 ] || return 1
+	case $POLICY_DIRECTION in
+		ascending) printf '%s\n' "$pwm" ;;
+		descending) printf '%s\n' "$((255 - pwm))" ;;
+		*) return 1 ;;
+	esac
+}
+
+policy_demand_to_pwm()
+{
+	local demand=$1
+	is_uint "$demand" && [ "$demand" -le 255 ] || return 1
+	case $POLICY_DIRECTION in
+		ascending) printf '%s\n' "$demand" ;;
+		descending) printf '%s\n' "$((255 - demand))" ;;
+		*) return 1 ;;
+	esac
 }
 
 policy_pwm_for_state()
@@ -64,19 +93,34 @@ policy_find_trip_node()
 policy_build()
 {
 	local file fan_phandle map cells minimum maximum state trip_phandle trip_node
-	local temperature hysteresis release pwm raw_points= count=0 actual_max point previous_pwm=-1 normalized=
+	local temperature hysteresis release pwm raw_points= count=0 actual_max point previous_state=-1 normalized=
+	local previous_level= direction= equal_levels=1
 	POLICY_AVAILABLE=0; POLICY_LEVELS=; POLICY_POINTS=; POLICY_MAX_STATE=0
+	POLICY_DIRECTION=; POLICY_FULL_PWM=; POLICY_FLOOR_DEMAND=
 	POLICY_LEVELS=$(hardware_read_be32_list "$HW_FAN_OF_NODE/cooling-levels") || return 1
 	file=$HW_FAN_OF_NODE/phandle; [ -r "$file" ] || file=$HW_FAN_OF_NODE/linux,phandle
 	 fan_phandle=$(hardware_read_be32 "$file") || return 1
 	set -f
 	for pwm in $POLICY_LEVELS; do
 		is_uint "$pwm" && [ "$pwm" -le 255 ] || { set +f; return 1; }
+		if [ -n "$previous_level" ] && [ "$pwm" -ne "$previous_level" ]; then
+			equal_levels=0
+			if [ "$pwm" -gt "$previous_level" ]; then
+				[ -z "$direction" ] || [ "$direction" = ascending ] || { set +f; return 1; }
+				direction=ascending
+			else
+				[ -z "$direction" ] || [ "$direction" = descending ] || { set +f; return 1; }
+				direction=descending
+			fi
+		fi
+		previous_level=$pwm
 		count=$((count + 1))
 	done
 	set +f
-	[ "$count" -gt 0 ] || return 1
+	[ "$count" -gt 0 ] && [ "$equal_levels" -eq 0 ] || return 1
 	POLICY_MAX_STATE=$((count - 1))
+	POLICY_DIRECTION=$direction
+	POLICY_FULL_PWM=$previous_level
 	actual_max=$(read_uint "$HW_COOLING/max_state" 2>/dev/null) || return 1
 	[ "$actual_max" -eq "$POLICY_MAX_STATE" ] || return 1
 
@@ -121,13 +165,13 @@ policy_build()
 	[ -n "$POLICY_POINTS" ] || return 1
 	set -f
 	for point in $POLICY_POINTS; do
-		pwm=${point##*:}
-		[ "$pwm" -ge "$previous_pwm" ] || { set +f; return 1; }
-		if [ "$pwm" -gt "$previous_pwm" ]; then
+		state=${point%:*}; state=${state##*:}
+		[ "$state" -ge "$previous_state" ] || { set +f; return 1; }
+		if [ "$state" -gt "$previous_state" ]; then
 			normalized="${normalized}${normalized:+
 }$point"
 		fi
-		previous_pwm=$pwm
+		previous_state=$state
 	done
 	set +f
 	POLICY_POINTS=$normalized
@@ -138,6 +182,7 @@ policy_floor_reset()
 {
 	POLICY_STATE=
 	POLICY_FLOOR_PWM=
+	POLICY_FLOOR_DEMAND=
 }
 
 policy_point_for_state()
@@ -180,6 +225,7 @@ policy_floor_update()
 	set +f
 	POLICY_STATE=$candidate
 	POLICY_FLOOR_PWM=$(policy_pwm_for_state "$candidate") || return 1
+	POLICY_FLOOR_DEMAND=$(policy_pwm_to_demand "$POLICY_FLOOR_PWM") || return 1
 }
 
 policy_handoff()

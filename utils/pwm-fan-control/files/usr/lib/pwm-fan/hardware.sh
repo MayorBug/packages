@@ -168,9 +168,11 @@ pwm_apply_verified()
 
 pwm_force_full()
 {
-	HW_REQUESTED_PWM=255
+	local target=$1
+	is_uint "$target" && [ "$target" -le 255 ] || return 1
+	HW_REQUESTED_PWM=$target
 	[ -w "$HW_HWMON/pwm1" ] || { HW_PWM_STATE=unavailable; return 1; }
-	if printf '255\n' > "$HW_HWMON/pwm1" 2>/dev/null; then HW_PWM_STATE=unverified; return 0; fi
+	if printf '%s\n' "$target" > "$HW_HWMON/pwm1" 2>/dev/null; then HW_PWM_STATE=unverified; return 0; fi
 	HW_PWM_STATE=unavailable
 	return 1
 }

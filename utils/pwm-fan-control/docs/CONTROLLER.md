@@ -49,8 +49,9 @@ unlimited respawn loop.
 | Curve | Control | stepped or smooth temperature curve |
 | Manual | Control | fixed configured output |
 
-Auto, Curve, and Manual calculate requested raw PWM, raise it to the evaluated
-DTS floor, and apply the effective raw PWM through one verified write path.
+Auto, Curve, and Manual calculate normalized cooling demand, raise it to the
+evaluated DTS floor, convert it according to the validated PWM direction, and
+apply the effective raw PWM through one verified write path.
 
 ## Startup lifecycle
 
@@ -61,13 +62,17 @@ DTS floor, and apply the effective raw PWM through one verified write path.
 5. Exit immediately when already Disabled.
 6. Discover required hardware once.
 7. Build and normalize the DTS policy once.
-8. Apply one policy handoff when entering Kernel.
-9. Acquire the daemon lock without waiting.
-10. Initialize role-specific state and scheduling deadlines.
-11. Enter the common runtime loop.
+8. Acquire the daemon lock without waiting, before any handoff or PWM write.
+9. If normalization is unsupported, preserve kernel ownership and select the
+   degraded Kernel observer without writing PWM.
+10. Otherwise apply one policy handoff when entering configured Kernel mode.
+11. Initialize role-specific state and scheduling deadlines.
+12. Enter the common runtime loop.
 
 Starting Disabled does not discover hardware. Entering Disabled from a running
-control role performs handoff before exit.
+control role performs handoff before exit. The monitor-only fallback preserves
+the saved configured mode, reports `active_mode=kernel`, sets
+`HANDOFF_ON_EXIT=0`, and emits one `kernel_monitor_fallback` warning.
 
 ## Reload lifecycle
 
@@ -110,8 +115,9 @@ lock, and exits.
 5. exits.
 
 Signal handling is idempotent. The daemon never claims handoff after an
-untrappable crash. After process disappearance, the target kernel PWM-fan
-implementation resumes thermal control naturally.
+untrappable crash. The design relies on the target kernel PWM-fan implementation
+resuming thermal control after process disappearance; that behavior is a
+platform assumption and requires device validation.
 
 ## Hardware discovery
 
@@ -146,8 +152,10 @@ pwm
 where release temperature is trip minus hysteresis.
 
 Validation ensures every referenced state exists, every state maps to a raw
-DTS cooling level, PWM never decreases with increasing temperature, trip order
-is valid, and duplicates are normalized deterministically.
+DTS cooling level, cooling state never decreases with increasing temperature,
+trip order is valid, and duplicates are normalized deterministically. Raw PWM
+levels may be monotonically ascending or descending. Mixed/non-monotonic raw
+levels are rejected because their cooling direction is ambiguous.
 
 ## Live kernel floor
 
@@ -163,7 +171,9 @@ POLICY_FLOOR_PWM
 ```
 
 The evaluator never reads `cur_state`. Every mode uses raw CPU temperature for
-the floor, regardless of modem selection or filtering.
+the floor, regardless of modem selection or filtering. It also exposes a
+normalized cooling demand so userspace arbitration and fan supervision remain
+correct when raw PWM polarity is descending.
 
 ## PWM application
 
@@ -184,9 +194,10 @@ HW_ACTUAL_PWM
 HW_PWM_STATE
 ```
 
-`pwm_force_full` attempts raw `255` once and is used only for fail-safe
-recovery. `policy_handoff` uses already loaded hardware and policy and never
-rediscovers or reparses DTS.
+`pwm_force_full` receives the strongest raw PWM derived from the validated
+maximum cooling state; it never assumes that raw `255` means full cooling.
+`policy_handoff` uses already loaded hardware and policy and never rediscovers
+or reparses DTS.
 
 ## Temperature selection and filtering
 
@@ -247,13 +258,15 @@ configured integral limit remains an independent limit.
 Entering Auto, changing PID settings, or an excessive sample gap resets the PID
 state. Auto never imports PWM or integral state from another mode.
 
-The final normalized output is converted directly to raw PWM once. Control does
-not convert through an intermediate rounded percentage.
+The final normalized output is retained as cooling demand until kernel-floor
+arbitration, then converted once to direction-aware raw PWM. Control does not
+convert through an intermediate rounded percentage.
 
 ## Curve
 
 Curve uses the same selected and filtered temperature as Auto. Configured
-percentages are converted to raw PWM when configuration becomes active.
+percentages are converted to normalized 0..255 cooling demand when configuration
+becomes active; raw PWM conversion occurs only after floor arbitration.
 
 Step mode retains hysteresis without reducing below the appropriate requested
 point. Smooth mode initially retains the monotone shape-preserving interpolation
@@ -263,9 +276,10 @@ Curve state resets only when mode, curve, filter, or modem selection changes.
 
 ## Manual
 
-Manual converts the configured percentage to raw PWM on activation. Optional
-modem monitoring continues, but Manual does not use modem temperature for fan
-output and does not select or filter temperature. It still reads raw CPU
+Manual converts the configured percentage to normalized 0..255 cooling demand
+on activation. Optional modem monitoring continues, but Manual does not use
+modem temperature for fan output and does not select or filter temperature. It
+still reads raw CPU
 temperature and enforces the DTS floor.
 
 At timeout:
@@ -342,10 +356,12 @@ tach_read_error
 It distinguishes a requested PWM that was not applied from an applied output
 with zero RPM. Missing tachometer and failed tachometer reads are separate.
 
-PWM zero with RPM zero is healthy. Above the configured running threshold, the
-watchdog provides a monotonic spin-up allowance and requires consecutive valid
-zero-RPM samples before it declares `fan_failed`. It calculates state only. The
-daemon owns fail-safe reactions and transition logging.
+Zero normalized cooling demand with zero RPM is healthy, regardless of raw PWM
+polarity. Above the configured normalized running threshold, the watchdog
+provides a monotonic spin-up allowance and requires consecutive valid zero-RPM
+samples before it declares `fan_failed`. Expected and actual raw PWM are first
+converted to cooling demand. The watchdog calculates state only; the daemon
+owns fail-safe reactions and transition logging.
 
 ## Ordered runtime cycle
 
@@ -361,22 +377,24 @@ if role == control:
     if mode == Auto:
         select CPU and fresh modem
         update shared filter
-        calculate requested_pwm with PID
+        calculate requested_demand with PID
     else if mode == Curve:
         select CPU and fresh modem
         update shared filter
-        calculate requested_pwm from curve
+        calculate requested_demand from curve
     else if mode == Manual:
-        requested_pwm = configured manual raw PWM
+        requested_demand = configured manual cooling demand
 
-    effective_pwm = max(requested_pwm, kernel_floor_pwm)
+    effective_demand = max(requested_demand, kernel_floor_demand)
+    requested_pwm = direction_to_raw(requested_demand)
+    effective_pwm = direction_to_raw(effective_demand)
     pwm_apply_verified(effective_pwm)
 
-fan_watch_update(now, expected_pwm, actual_pwm, pwm_state, rpm, tach_state)
+fan_watch_update(now, expected_demand, actual_demand, pwm_state, rpm, tach_state)
 apply fail-safe reaction when required
 
 snapshot = build current state once
-write status if due
+write status every cycle
 append the same snapshot to history if due
 sleep until the absolute next deadline
 ```
@@ -388,9 +406,12 @@ cycle.
 
 ### Required CPU or policy failure
 
-In a control role, attempt full output, publish an explicit failure, and retry
-discovery with ten-second backoff. Kernel observe publishes the failure without
-userspace PWM writes after handoff.
+An unsupported policy detected before userspace takes ownership starts the
+read-only Kernel monitoring fallback and performs no PWM write. In an
+established control role, loss of required CPU or policy data attempts the
+strongest output from the last validated policy, publishes an explicit failure,
+and retries discovery with ten-second backoff. Kernel observe publishes the
+failure without userspace PWM writes after handoff.
 
 ### PWM write failure
 
@@ -401,8 +422,9 @@ application and is logged once.
 ### Fan failure
 
 In a control role, request full output and preserve the confirmed fan fault
-until valid RPM recovery. Kernel observe reports the failed fan against its
-expected policy floor without writing PWM.
+until valid RPM recovery. Kernel observe supervises RPM against the normalized
+actual applied output without writing PWM; it does not claim that `cur_state`
+or the evaluated floor was applied by the kernel.
 
 ### Optional modem failure
 
@@ -440,8 +462,10 @@ thermal_zone
 tachometer_available
 runtime_role
 configuration_state
+configuration_diagnostics (status-json envelope)
 hardware_state
 control_state
+control_reason
 history_state
 cpu_temperature_millic
 modem_temperature_millic
@@ -449,6 +473,8 @@ selected_temperature_source
 selected_temperature_millic
 filtered_temperature_millic
 requested_pwm
+kernel_policy_direction
+kernel_strongest_pwm
 kernel_floor_state
 kernel_floor_pwm
 effective_pwm
@@ -464,9 +490,12 @@ pid
 Auto status sets `pid.state` to `active` or `idle`. The PID object does not
 contain a configurable idle margin.
 
-Kernel status has null `requested_pwm` and `effective_pwm`. Manual status has
-null selected and filtered temperatures while retaining optional modem
-telemetry. Disabled has no live snapshot.
+Kernel status has null `requested_pwm` and `effective_pwm`. The monitor-only
+fallback additionally has null policy direction, strongest output, and kernel
+floor fields because no policy was validated. It continues to publish actual
+PWM, CPU temperature, optional RPM, and history. Manual status has null selected
+and filtered temperatures while retaining optional modem telemetry. Disabled
+has no live snapshot.
 `config_revision` is never included.
 
 `configured_mode`, `configuration_state`, and configuration diagnostics describe

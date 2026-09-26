@@ -46,6 +46,68 @@ assert_eq "$(cat "$sys/class/hwmon/hwmon0/pwm1")" 0 'normal stop hands output ba
 [ ! -e "$run/status.json" ] || fail 'runtime status remained after normal stop'
 pass 'normal stop removes runtime status'
 
+# An unnormalizable kernel policy must leave PWM untouched and keep a live,
+# read-only observer even when the saved mode requests userspace control.
+python3 - "$sys/firmware/devicetree/base/fan/cooling-levels" <<'PY'
+import pathlib, struct, sys
+pathlib.Path(sys.argv[1]).write_bytes(b''.join(struct.pack('>I', value) for value in (0, 255, 128)))
+PY
+printf '77\n' > "$sys/class/hwmon/hwmon0/pwm1"
+printf '0\n' > "$TEST_TMP/uptime"
+PWM_FAN_SYS_ROOT=$sys PWM_FAN_RUN_DIR=$run PWM_FAN_UPTIME_FILE=$TEST_TMP/uptime \
+	PWM_FAN_STATUS_FILE=$run/status.json PWM_FAN_LOGGER=$bin/logger \
+	PWM_FAN_SLEEP=$bin/sleep PWM_FAN_TEST_LOG=$TEST_TMP/fallback-events \
+	PWM_FAN_CAPTURED_STATUS=$TEST_TMP/fallback-status.json \
+	"$CONTROLLER" run -c "$config"
+python3 - "$TEST_TMP/fallback-status.json" <<'PY'
+import json, pathlib, sys
+status = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert status['configured_mode'] == 'manual'
+assert status['active_mode'] == 'kernel'
+assert status['runtime_role'] == 'observe'
+assert status['control_state'] == 'error'
+assert status['control_reason'] == 'kernel_policy_invalid'
+assert status['cpu_temperature_millic'] == 50000
+assert status['actual_pwm'] == 77
+assert status['requested_pwm'] is None
+assert status['effective_pwm'] is None
+assert status['kernel_floor_pwm'] is None
+assert status['kernel_policy_direction'] is None
+assert status['kernel_strongest_pwm'] is None
+PY
+assert_eq "$(cat "$sys/class/hwmon/hwmon0/pwm1")" 77 \
+	'kernel monitor fallback never writes PWM'
+assert_eq "$(grep -c 'code=kernel_monitor_fallback' "$TEST_TMP/fallback-events")" 1 \
+	'kernel monitor fallback logs one startup transition'
+pass 'invalid kernel policy falls back to live kernel-owned monitoring'
+python3 - "$sys/firmware/devicetree/base/fan/cooling-levels" <<'PY'
+import pathlib, struct, sys
+pathlib.Path(sys.argv[1]).write_bytes(b''.join(struct.pack('>I', value) for value in (255, 40, 0)))
+PY
+printf '255\n' > "$sys/class/hwmon/hwmon0/pwm1"
+printf '0\n' > "$TEST_TMP/uptime"
+PWM_FAN_SYS_ROOT=$sys PWM_FAN_RUN_DIR=$run PWM_FAN_UPTIME_FILE=$TEST_TMP/uptime \
+	PWM_FAN_STATUS_FILE=$run/status.json PWM_FAN_LOGGER=$bin/logger \
+	PWM_FAN_SLEEP=$bin/sleep PWM_FAN_TEST_LOG=$TEST_TMP/inverted-events \
+	PWM_FAN_CAPTURED_STATUS=$TEST_TMP/inverted-status.json \
+	"$CONTROLLER" run -c "$config"
+python3 - "$TEST_TMP/inverted-status.json" <<'PY'
+import json, pathlib, sys
+status = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert status['kernel_policy_direction'] == 'descending'
+assert status['kernel_strongest_pwm'] == 0
+assert status['requested_pwm'] == 127
+assert status['effective_pwm'] == 127
+assert status['actual_pwm'] == 127
+PY
+assert_eq "$(cat "$sys/class/hwmon/hwmon0/pwm1")" 255 \
+	'inverted normal stop hands output back to kernel state zero'
+pass 'manual cooling demand is converted to inverted raw PWM'
+python3 - "$sys/firmware/devicetree/base/fan/cooling-levels" <<'PY'
+import pathlib, struct, sys
+pathlib.Path(sys.argv[1]).write_bytes(b''.join(struct.pack('>I', value) for value in (0, 128, 255)))
+PY
+
 auto_config=$TEST_TMP/auto.conf
 sed -e 's/^mode=.*/mode=auto/' -e 's/^tach_enabled=.*/tach_enabled=0/' \
 	-e 's/^pid_kp=.*/pid_kp=0.07/' -e 's/^pid_ki=.*/pid_ki=0.0002/' \

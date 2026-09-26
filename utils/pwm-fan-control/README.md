@@ -12,7 +12,14 @@ The controller supports these modes:
 - Disabled stops the service and does not access the hardware.
 
 The Linux thermal policy always supplies the minimum cooling level. Auto,
-Curve, and Manual cannot request less cooling than this level.
+Curve, and Manual cannot request less cooling than this level. Device-tree
+cooling levels may use ascending or electrically inverted raw PWM values; the
+controller normalizes cooling demand and derives fail-safe output from the
+strongest declared cooling state.
+
+If the fan and CPU sensor are discoverable but the thermal policy cannot be
+normalized safely, the service preserves the saved mode while running as a
+degraded, read-only Kernel observer. It does not write PWM in this fallback.
 
 The package installs these main files:
 
