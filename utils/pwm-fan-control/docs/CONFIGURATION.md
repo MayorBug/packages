@@ -291,7 +291,7 @@ State resets are selective:
 | tach setting | fan-watch state |
 | manual timeout | timeout origin |
 
-## Upgrade from format 1
+## Configuration and package upgrades
 
 The service upgrades a format-1 file one time. It preserves all settings that
 are not filter settings. It removes `temperature_samples` and sets these
@@ -303,7 +303,14 @@ temperature_filter_duration_s=10
 ```
 
 The service writes the complete format-2 file atomically. A format-2 file that
-contains `temperature_samples` is invalid.
+contains `temperature_samples` is invalid. When an older format-2 file lacks the
+additive `wifi_source` key, service startup writes `wifi_source=off` atomically;
+no manual configuration edit is required.
+
+A first APK installation enables and starts the service. An APK upgrade fully
+restarts an already-running controller so newly installed shell libraries take
+effect, while an intentionally stopped controller remains stopped. Image-root
+package assembly never starts a host service.
 
 ## Modem settings
 

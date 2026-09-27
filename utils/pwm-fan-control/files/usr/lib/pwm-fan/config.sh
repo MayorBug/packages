@@ -449,6 +449,30 @@ config_reset()
 	config_revision "$target"
 }
 
+config_upgrade_additive()
+{
+	local target=${1:-${PWM_FAN_CONFIG_FILE:-/etc/pwm-fan.conf}}
+	[ -f "$target" ] || return 2
+	config_lock_acquire || return 1
+	if ! config_parse "$target"; then
+		config_lock_release
+		return 1
+	fi
+	if config_seen wifi_source; then
+		config_lock_release
+		return 2
+	fi
+	if ! config_validate; then
+		config_lock_release
+		return 1
+	fi
+	if ! config_render | atomic_replace "$target" 0600; then
+		config_lock_release
+		return 1
+	fi
+	config_lock_release
+}
+
 config_upgrade_v1()
 {
 	local target=${1:-${PWM_FAN_CONFIG_FILE:-/etc/pwm-fan.conf}} version candidate directory

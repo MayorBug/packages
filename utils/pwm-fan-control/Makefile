@@ -5,7 +5,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=pwm-fan-control
 PKG_VERSION:=1.1.0
-PKG_RELEASE:=1
+PKG_RELEASE:=2
 PKG_MAINTAINER:=Georg Seema <georgseema@gmail.com>
 PKG_LICENSE:=GPL-2.0-only
 
@@ -31,6 +31,11 @@ endef
 define Build/Compile
 endef
 
+define Package/pwm-fan-control/postinst
+#!/bin/sh
+[ -n "$${IPKG_INSTROOT}" ] || /usr/lib/pwm-fan/package-lifecycle.sh
+endef
+
 define Package/pwm-fan-control/install
 	$(INSTALL_DIR) $(1)/etc/init.d $(1)/usr/sbin $(1)/usr/lib/pwm-fan
 	$(INSTALL_CONF) ./files/etc/pwm-fan.conf $(1)/etc/pwm-fan.conf
@@ -46,6 +51,7 @@ define Package/pwm-fan-control/install
 	$(INSTALL_DATA) ./files/usr/lib/pwm-fan/runtime.sh $(1)/usr/lib/pwm-fan/runtime.sh
 	$(INSTALL_DATA) ./files/usr/lib/pwm-fan/daemon.sh $(1)/usr/lib/pwm-fan/daemon.sh
 	$(INSTALL_DATA) ./files/usr/lib/pwm-fan/api.sh $(1)/usr/lib/pwm-fan/api.sh
+	$(INSTALL_BIN) ./files/usr/lib/pwm-fan/package-lifecycle.sh $(1)/usr/lib/pwm-fan/package-lifecycle.sh
 endef
 
 $(eval $(call BuildPackage,pwm-fan-control))

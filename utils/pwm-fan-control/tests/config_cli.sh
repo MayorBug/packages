@@ -60,4 +60,14 @@ PY
 done
 pass 'nonnumeric integer fields return structured diagnostics'
 
+upgrade_config=$TEST_TMP/upgrade.conf
+sed '/^wifi_source=/d' "$DEFAULT_CONFIG" > "$upgrade_config"
+PWM_FAN_CONFIG_FILE=$upgrade_config PWM_FAN_CONFIG_LOCK=$TEST_TMP/upgrade.lock \
+PWM_FAN_LOGGER=: "$CONTROLLER" config-upgrade
+grep -q '^wifi_source=off$' "$upgrade_config" ||
+	fail 'config-upgrade did not persist the missing Wi-Fi default'
+PWM_FAN_CONFIG_FILE=$upgrade_config PWM_FAN_CONFIG_LOCK=$TEST_TMP/upgrade.lock \
+PWM_FAN_LOGGER=: "$CONTROLLER" config-upgrade
+pass 'config-upgrade canonicalizes legacy format-2 Wi-Fi default'
+
 pass 'configuration CLI contract'

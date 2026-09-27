@@ -116,6 +116,18 @@ grep -q '^mode=kernel$' "$target" || fail 'config reset did not restore Kernel m
 cmp -s "$target" "$DEFAULT_CONFIG" || fail 'config reset differs from current defaults'
 pass 'config reset installs current defaults'
 
+additive=$TEST_TMP/missing-wifi.conf
+sed '/^wifi_source=/d' "$DEFAULT_CONFIG" > "$additive"
+config_upgrade_additive "$additive"
+grep -q '^wifi_source=off$' "$additive" ||
+	fail 'additive upgrade did not persist the Wi-Fi default'
+if config_upgrade_additive "$additive"; then
+	fail 'additive upgrade rewrote an already-current configuration'
+else
+	[ "$?" -eq 2 ] || fail 'current additive configuration returned an unexpected error'
+fi
+pass 'additive upgrade persists missing Wi-Fi default once'
+
 legacy=$TEST_TMP/version1.conf
 sed -e 's/^config_version=.*/config_version=1/' \
 	-e 's/^mode=.*/mode=manual/' \

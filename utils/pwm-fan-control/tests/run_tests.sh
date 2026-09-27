@@ -8,6 +8,7 @@ TEST_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 "$TEST_DIR/config_library.sh"
 "$TEST_DIR/config_cli.sh"
 "$TEST_DIR/status_cli.sh"
+"$TEST_DIR/package_lifecycle.sh"
 "$TEST_DIR/hardware_library.sh"
 "$TEST_DIR/wifi_library.sh"
 "$TEST_DIR/config.sh"

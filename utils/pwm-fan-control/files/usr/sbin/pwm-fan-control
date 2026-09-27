@@ -65,6 +65,11 @@ main()
 			if config_upgrade_v1 "$CONFIG_FILE"; then
 				log_event info configuration_upgraded 'from=1 to=2 reset=temperature_filter'
 			else
+				[ "$?" -eq 2 ] || return 1
+			fi
+			if config_upgrade_additive "$CONFIG_FILE"; then
+				log_event info configuration_upgraded 'added=wifi_source default=off'
+			else
 				[ "$?" -eq 2 ]
 			fi ;;
 		validate) parse_validate_options "$@" && config_document_json "$VALIDATE_FILE" ;;
