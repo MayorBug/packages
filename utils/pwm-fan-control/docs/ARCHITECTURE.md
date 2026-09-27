@@ -35,9 +35,9 @@ An active mode then finds one hwmon device and one CPU thermal zone.
 
 Each control cycle does these actions in order:
 
-1. Read the required hardware data.
+1. Read the required hardware data and enabled local Wi-Fi sensor data.
 2. Use the last fresh modem sample, when one exists.
-3. Select and filter the control temperature.
+3. Select the hottest CPU, available Wi-Fi, or fresh modem value and filter it.
 4. Calculate the requested fan output.
 5. Apply the minimum output from the kernel policy.
 6. Write and read back PWM when the active mode controls the fan.

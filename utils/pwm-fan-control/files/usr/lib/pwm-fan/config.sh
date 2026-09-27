@@ -4,7 +4,7 @@
 
 # Configuration ownership only. common.sh must be sourced by the caller.
 
-CFG_KEYS='config_version mode control_interval_s hwmon_name thermal_zone tach_enabled temperature_filter temperature_filter_duration_s modem_source modem_http_host modem_at_device modem_interval_s pid_target_c pid_kp pid_ki pid_kd pid_integral_limit curve_style curve_hysteresis_c curve_points manual_output_percent manual_timeout_min'
+CFG_KEYS='config_version mode control_interval_s hwmon_name thermal_zone tach_enabled temperature_filter temperature_filter_duration_s wifi_source modem_source modem_http_host modem_at_device modem_interval_s pid_target_c pid_kp pid_ki pid_kd pid_integral_limit curve_style curve_hysteresis_c curve_points manual_output_percent manual_timeout_min'
 
 config_defaults()
 {
@@ -17,6 +17,7 @@ config_defaults()
 	CFG_TACH_ENABLED=1
 	CFG_TEMPERATURE_FILTER=median
 	CFG_TEMPERATURE_FILTER_DURATION_S=10
+	CFG_WIFI_SOURCE=off
 	CFG_MODEM_SOURCE=off
 	CFG_MODEM_HTTP_HOST=192.168.224.1
 	CFG_MODEM_AT_DEVICE=/dev/ttyUSB2
@@ -128,6 +129,7 @@ config_set_value()
 		tach_enabled) CFG_TACH_ENABLED=$value ;;
 		temperature_filter) CFG_TEMPERATURE_FILTER=$value ;;
 		temperature_filter_duration_s) CFG_TEMPERATURE_FILTER_DURATION_S=$value ;;
+		wifi_source) CFG_WIFI_SOURCE=$value ;;
 		modem_source) CFG_MODEM_SOURCE=$value ;;
 		modem_http_host) CFG_MODEM_HTTP_HOST=$value ;;
 		modem_at_device) CFG_MODEM_AT_DEVICE=$value ;;
@@ -157,6 +159,7 @@ config_get_value()
 		tach_enabled) printf '%s\n' "$CFG_TACH_ENABLED" ;;
 		temperature_filter) printf '%s\n' "$CFG_TEMPERATURE_FILTER" ;;
 		temperature_filter_duration_s) printf '%s\n' "$CFG_TEMPERATURE_FILTER_DURATION_S" ;;
+		wifi_source) printf '%s\n' "$CFG_WIFI_SOURCE" ;;
 		modem_source) printf '%s\n' "$CFG_MODEM_SOURCE" ;;
 		modem_http_host) printf '%s\n' "$CFG_MODEM_HTTP_HOST" ;;
 		modem_at_device) printf '%s\n' "$CFG_MODEM_AT_DEVICE" ;;
@@ -272,6 +275,16 @@ config_validate_points()
 	fi
 }
 
+config_wifi_source_name()
+{
+	local rest chip phy
+	case $1 in mt*_phy*) ;; *) return 1 ;; esac
+	rest=${1#mt}; chip=${rest%%_phy*}; phy=${rest#*_phy}
+	case $chip in ''|*[!0-9]*) return 1 ;; esac
+	case $phy in ''|*[!0-9]*) return 1 ;; esac
+	[ "$rest" = "${chip}_phy${phy}" ]
+}
+
 config_validate()
 {
 	local failed=0
@@ -285,6 +298,12 @@ config_validate()
 	case $CFG_TEMPERATURE_FILTER_DURATION_S in
 		5|10|15) ;;
 		*) config_diag error invalid_value temperature_filter_duration_s 0 "$CFG_TEMPERATURE_FILTER_DURATION_S" 10 'Expected 5, 10, or 15 seconds.'; failed=1 ;;
+	esac
+	case $CFG_WIFI_SOURCE in
+		off|auto) ;;
+		*) if ! config_wifi_source_name "$CFG_WIFI_SOURCE" || [ "${#CFG_WIFI_SOURCE}" -gt 64 ]; then
+			config_diag error invalid_value wifi_source 0 "$CFG_WIFI_SOURCE" off 'Expected off, auto, or a supported MediaTek Wi-Fi hwmon name.'; failed=1
+		fi ;;
 	esac
 	case $CFG_MODEM_SOURCE in off|qmanager_http|quectel_at) ;; *) config_diag error invalid_value modem_source 0 "$CFG_MODEM_SOURCE" off 'Expected off, qmanager_http, or quectel_at.'; failed=1 ;; esac
 	case $CFG_MODEM_HTTP_HOST in ''|-*|*[!A-Za-z0-9.-]*) config_diag error invalid_value modem_http_host 0 "$CFG_MODEM_HTTP_HOST" 192.168.224.1 'Expected a conservative hostname or IPv4 address.'; failed=1 ;; *) [ "${#CFG_MODEM_HTTP_HOST}" -le 253 ] || { config_diag error invalid_value modem_http_host 0 "$CFG_MODEM_HTTP_HOST" 192.168.224.1 'Expected at most 253 characters.'; failed=1; } ;; esac
@@ -316,6 +335,7 @@ config_render()
 			tach_enabled) comment='Read fan1_input and detect a stopped fan (0 or 1).' ;;
 			temperature_filter) comment='Temperature filter: none or median.' ;;
 			temperature_filter_duration_s) comment='Median filter duration in seconds: 5, 10, or 15.' ;;
+			wifi_source) comment='Optional Wi-Fi source: off, auto, or a supported MediaTek hwmon name.' ;;
 			modem_source) comment='Optional modem source: off, qmanager_http, or quectel_at.' ;;
 			modem_http_host) comment='QManager host or IPv4 address.' ;;
 			modem_at_device) comment='Quectel AT port.' ;;
@@ -374,13 +394,23 @@ config_lock_release()
 
 config_install()
 {
-	local candidate=$1 expected=${2:-} target=${3:-${PWM_FAN_CONFIG_FILE:-/etc/pwm-fan.conf}} current
+	local candidate=$1 expected=${2:-} target=${3:-${PWM_FAN_CONFIG_FILE:-/etc/pwm-fan.conf}} current current_wifi=off
 	config_lock_acquire || return 1
 	current=$(config_revision "$target") || { config_lock_release; return 1; }
 	if [ -n "$expected" ] && [ "$expected" != "$current" ]; then
 		config_lock_release; return 2
 	fi
-	if ! config_parse "$candidate" || ! config_validate; then
+	config_parse "$target" >/dev/null 2>&1 || true
+	case $CFG_WIFI_SOURCE in
+		off|auto) current_wifi=$CFG_WIFI_SOURCE ;;
+		*) config_wifi_source_name "$CFG_WIFI_SOURCE" && current_wifi=$CFG_WIFI_SOURCE ;;
+	esac
+	if ! config_parse "$candidate"; then
+		config_lock_release; return 1
+	fi
+	# Preserve this additive setting when an older complete-config client omits it.
+	config_seen wifi_source || CFG_WIFI_SOURCE=$current_wifi
+	if ! config_validate; then
 		config_lock_release; return 1
 	fi
 	if ! config_render | atomic_replace "$target" 0600; then

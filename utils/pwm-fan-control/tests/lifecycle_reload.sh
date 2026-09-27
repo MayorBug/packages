@@ -90,6 +90,56 @@ grep -q '"actual_pwm":128' "$TEST_TMP/restart-status.json" ||
 	fail 'hardware target rejection stopped controlling the original fan'
 pass 'hardware target changes require restart and preserve the active target'
 
+wifi_reload_config=$TEST_TMP/wifi-reload.conf
+sed -e 's/^mode=.*/mode=auto/' -e 's/^tach_enabled=.*/tach_enabled=0/' \
+	-e 's/^temperature_filter=.*/temperature_filter=none/' \
+	-e 's/^wifi_source=.*/wifi_source=mt7915_phy0/' \
+	"$DEFAULT_CONFIG" > "$wifi_reload_config"
+mkdir -p "$sys/class/hwmon/hwmon3" "$sys/class/hwmon/hwmon4"
+printf 'mt7915_phy0\n' > "$sys/class/hwmon/hwmon3/name"
+printf '57000\n' > "$sys/class/hwmon/hwmon3/temp1_input"
+printf 'mt7915_phy1\n' > "$sys/class/hwmon/hwmon4/name"
+printf '76000\n' > "$sys/class/hwmon/hwmon4/temp1_input"
+printf '0\n' > "$TEST_TMP/uptime"
+printf '0\n' > "$TEST_TMP/wifi-reload-sleep-count"
+cooling_levels=$sys/firmware/devicetree/base/fan/cooling-levels
+cp "$cooling_levels" "$TEST_TMP/cooling-levels"
+cat > "$bin/sleep" <<'EOF'
+#!/bin/sh
+count=$(cat "$PWM_FAN_TEST_SLEEP_COUNT"); count=$((count + 1))
+printf '%s\n' "$count" > "$PWM_FAN_TEST_SLEEP_COUNT"
+case $count in
+	1)
+		sed 's/^wifi_source=.*/wifi_source=mt7915_phy1/' \
+			"$PWM_FAN_TEST_CONFIG" > "$PWM_FAN_TEST_CONFIG.tmp"
+		mv "$PWM_FAN_TEST_CONFIG.tmp" "$PWM_FAN_TEST_CONFIG"
+		: > "$PWM_FAN_TEST_COOLING_LEVELS"
+		kill -HUP "$PPID" ;;
+	*)
+		cp "$PWM_FAN_STATUS_FILE" "$PWM_FAN_CAPTURED_STATUS"
+		kill -TERM "$PPID" ;;
+esac
+EOF
+chmod +x "$bin/sleep"
+PWM_FAN_SYS_ROOT=$sys PWM_FAN_RUN_DIR=$run PWM_FAN_UPTIME_FILE=$TEST_TMP/uptime \
+	PWM_FAN_STATUS_FILE=$run/status.json PWM_FAN_LOGGER=$bin/logger \
+	PWM_FAN_CONFIG_LOCK=$TEST_TMP/wifi-reload.lock \
+	PWM_FAN_SLEEP=$bin/sleep PWM_FAN_TEST_LOG=$TEST_TMP/wifi-reload-events \
+	PWM_FAN_TEST_SLEEP_COUNT=$TEST_TMP/wifi-reload-sleep-count \
+	PWM_FAN_TEST_CONFIG=$wifi_reload_config \
+	PWM_FAN_TEST_COOLING_LEVELS=$cooling_levels \
+	PWM_FAN_CAPTURED_STATUS=$TEST_TMP/wifi-reload-status.json \
+	"$CONTROLLER" run -c "$wifi_reload_config"
+cp "$TEST_TMP/cooling-levels" "$cooling_levels"
+python3 - "$TEST_TMP/wifi-reload-status.json" <<'PY'
+import json, pathlib, sys
+status = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert status['wifi_source'] == 'mt7915_phy0'
+assert status['wifi_temperature_source'] == 'mt7915_phy0'
+assert status['wifi_temperature_millic'] == 57000
+PY
+pass 'rejected reload restores active Wi-Fi discovery state'
+
 failure_config=$TEST_TMP/manual-timeout-failure.conf
 sed -e 's/^mode=.*/mode=manual/' \
 	-e 's/^manual_timeout_min=.*/manual_timeout_min=1/' \

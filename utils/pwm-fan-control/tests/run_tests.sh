@@ -9,6 +9,7 @@ TEST_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 "$TEST_DIR/config_cli.sh"
 "$TEST_DIR/status_cli.sh"
 "$TEST_DIR/hardware_library.sh"
+"$TEST_DIR/wifi_library.sh"
 "$TEST_DIR/config.sh"
 "$TEST_DIR/algorithms.sh"
 "$TEST_DIR/history.sh"
@@ -16,4 +17,5 @@ TEST_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 sh "$TEST_DIR/runtime_health.sh"
 "$TEST_DIR/lifecycle_modes.sh"
 "$TEST_DIR/lifecycle_modem.sh"
+"$TEST_DIR/lifecycle_wifi.sh"
 "$TEST_DIR/lifecycle_reload.sh"

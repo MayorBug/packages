@@ -15,7 +15,8 @@ The Linux thermal policy always supplies the minimum cooling level. Auto,
 Curve, and Manual cannot request less cooling than this level. Device-tree
 cooling levels may use ascending or electrically inverted raw PWM values; the
 controller normalizes cooling demand and derives fail-safe output from the
-strongest declared cooling state.
+strongest declared cooling state. Auto and Curve can optionally include the
+hottest supported MediaTek Wi-Fi hwmon reading alongside CPU and modem data.
 
 If the fan and CPU sensor are discoverable but the thermal policy cannot be
 normalized safely, the service preserves the saved mode while running as a
@@ -39,6 +40,9 @@ order when two statements conflict:
 1. [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) defines ownership and system boundaries.
 2. [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) defines configuration behavior.
 3. [`docs/CONTROLLER.md`](docs/CONTROLLER.md) defines runtime behavior.
+
+[`docs/TEMPERATURE_SOURCES_PLAN.md`](docs/TEMPERATURE_SOURCES_PLAN.md) defines
+the optional Wi-Fi temperature-source extension.
 
 Report a conflict instead of selecting the lower document.
 

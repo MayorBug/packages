@@ -136,14 +136,15 @@ status_unavailable_json()
 	printf '"configured_mode":"%s","active_mode":null,"runtime_role":"%s",' \
 		"$(printf '%s' "$mode" | json_escape)" "$role"
 	printf '"curve_style":null,"temperature_filter":null,"tach_enabled":null,'
-	printf '"modem_source":null,"modem_http_host":null,"modem_at_device":null,"modem_interval_s":null,'
+	printf '"wifi_source":null,"modem_source":null,"modem_http_host":null,"modem_at_device":null,"modem_interval_s":null,'
 	printf '"hwmon_name":null,"thermal_zone":null,"tachometer_available":null,'
 	printf '"configuration_state":"%s","hardware_state":"unknown",' "$configuration"
 	printf '"configuration_diagnostics":%s,' "$diagnostics"
 	printf '"control_state":"%s","control_reason":"%s","history_state":"unknown",' \
 		"$control" "$reason"
-	printf '"cpu_temperature_millic":null,"modem_temperature_millic":null,'
-	printf '"selected_temperature_millic":null,"filtered_temperature_millic":null,'
+	printf '"cpu_temperature_millic":null,"wifi_temperature_millic":null,"wifi_temperature_source":null,'
+	printf '"wifi_state":"unknown","wifi_sensors":[],"modem_temperature_millic":null,'
+	printf '"selected_temperature_source":null,"selected_temperature_millic":null,"filtered_temperature_millic":null,'
 	printf '"requested_pwm":null,"kernel_floor_state":null,"kernel_floor_pwm":null,'
 	printf '"effective_pwm":null,"actual_pwm":null,"rpm":null,'
 	printf '"tach_state":"unknown","fan_state":"unknown","modem_state":"unknown",'
@@ -250,10 +251,41 @@ policy_points_json()
 	printf ']'
 }
 
+wifi_probe_json()
+{
+	local configured=$CFG_WIFI_SOURCE record name value first=1 selected=false found=0
+	CFG_WIFI_SOURCE=auto
+	hardware_wifi_discover >/dev/null 2>&1 || true
+	hardware_wifi_read >/dev/null 2>&1 || true
+	printf '['
+	while IFS= read -r record || [ -n "$record" ]; do
+		[ -n "$record" ] || continue
+		name=${record%%|*}; value=${record#*|}
+		[ "$name" = "$configured" ] && found=1
+		case $configured in
+			auto) [ "$name" = "$HW_WIFI_TEMPERATURE_SOURCE" ] && selected=true || selected=false ;;
+			*) [ "$name" = "$configured" ] && selected=true || selected=false ;;
+		esac
+		[ "$first" -eq 1 ] || printf ','
+		printf '{"name":"%s","temperature_millic":%s,"available":%s,"selected":%s}' \
+			"$(printf '%s' "$name" | json_escape)" "$value" \
+			"$([ "$value" != null ] && printf true || printf false)" "$selected"
+		first=0
+	done <<EOF
+$HW_WIFI_READINGS
+EOF
+	if [ "$configured" != off ] && [ "$configured" != auto ] && [ "$found" -eq 0 ]; then
+		[ "$first" -eq 1 ] || printf ','
+		printf '{"name":"%s","temperature_millic":null,"available":false,"selected":true}' \
+			"$(printf '%s' "$configured" | json_escape)"
+	fi
+	printf ']'
+}
+
 probe_json()
 {
 	local file=$1 parse_ok=1 validate_ok=1 applicable=true observation_available=false code=none pwm_readable=false pwm_writable=false
-	local actual_pwm=null cpu_temperature=null rpm=null tach_state=unknown
+	local actual_pwm=null cpu_temperature=null rpm=null tach_state=unknown wifi_json='[]'
 	config_parse "$file" || parse_ok=0
 	config_validate || validate_ok=0
 	if [ "$parse_ok" -ne 1 ] || [ "$validate_ok" -ne 1 ]; then
@@ -280,6 +312,7 @@ probe_json()
 		rpm=${HW_RPM:-null}
 		tach_state=$HW_TACH_STATE
 	fi
+	wifi_json=$(wifi_probe_json)
 	printf '{"contract_version":%s,"valid":true,"applicable":%s,"observation_available":%s,' \
 		"$STATUS_VERSION" "$applicable" "$observation_available"
 	if [ "$code" = none ]; then printf '"diagnostics":[],'; else
@@ -294,6 +327,7 @@ probe_json()
 		"$([ -n "$HW_TACH" ] && printf true || printf false)" "$pwm_readable" "$pwm_writable"
 	printf '"actual_pwm":%s,"cpu_temperature_millic":%s,"rpm":%s,"tach_state":"%s"},' \
 		"$actual_pwm" "$cpu_temperature" "$rpm" "$tach_state"
+	printf '"wifi_sensors":%s,' "$wifi_json"
 	printf '"kernel_policy":{"available":%s,"max_state":%s,"direction":' \
 		"$([ "$POLICY_AVAILABLE" -eq 1 ] && printf true || printf false)" "$POLICY_MAX_STATE"
 	if [ -n "${POLICY_DIRECTION:-}" ]; then printf '"%s"' "$POLICY_DIRECTION"; else printf 'null'; fi

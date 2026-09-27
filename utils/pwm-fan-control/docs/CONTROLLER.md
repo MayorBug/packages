@@ -201,14 +201,16 @@ or reparses DTS.
 
 ## Temperature selection and filtering
 
-CPU temperature is required in every running role. Optional modem temperature
-never substitutes for CPU health.
+CPU temperature is required in every running role. Optional Wi-Fi and modem
+temperatures never substitute for CPU health.
 
 Auto and Curve use:
 
 ```text
 selected_temperature_millic =
-    max(cpu_temperature_millic, fresh modem_temperature_millic)
+    max(cpu_temperature_millic,
+        available wifi_temperature_millic,
+        fresh modem_temperature_millic)
 
 temperature_filter_update selected_temperature_millic
 control_temperature_millic = FILTER_OUTPUT_MILLIC
@@ -219,8 +221,8 @@ timestamped readings for the selected 5, 10, or 15-second duration. It returns
 the median of the readings that remain in that duration.
 
 Filtering resets when Auto or Curve starts. It also resets when the filter,
-control interval, modem source, modem endpoint, or modem interval changes.
-Temporary modem loss does not reset the buffer. Kernel and Manual bypass
+control interval, Wi-Fi source, modem source, modem endpoint, or modem interval
+changes. Temporary optional-source loss does not reset the buffer. Kernel and Manual bypass
 selection and filtering.
 
 ## Auto PID
@@ -453,6 +455,7 @@ curve_style
 temperature_filter
 temperature_filter_duration_s
 tach_enabled
+wifi_source
 modem_source
 modem_http_host
 modem_at_device
@@ -468,6 +471,10 @@ control_state
 control_reason
 history_state
 cpu_temperature_millic
+wifi_temperature_millic
+wifi_temperature_source
+wifi_state
+wifi_sensors
 modem_temperature_millic
 selected_temperature_source
 selected_temperature_millic
@@ -512,13 +519,16 @@ current hardware PWM and CPU telemetry independently.
 ## History
 
 The daemon owns `/var/run/pwm-fan-control/history.tsv`. Every record is the current
-runtime snapshot and contains ten tab-separated fields:
+runtime snapshot and contains twelve tab-separated fields. The first ten retain
+the version-1 layout; Wi-Fi fields are appended for compatibility:
 
 ```text
 timestamp mode cpu_temperature_millic modem_temperature_millic requested_pwm
 kernel_floor_pwm effective_pwm actual_pwm rpm fan_state
+wifi_temperature_millic selected_temperature_source
 ```
 
+The normalizer accepts legacy ten-field rows and new twelve-field rows.
 Unavailable values are literal `null`. One record is appended every 60
 monotonic seconds in Kernel, Auto, Curve, and Manual. Disabled adds none.
 

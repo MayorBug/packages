@@ -6,6 +6,9 @@ hardware_policy_refresh()
 	local old_thermal=$HW_THERMAL old_thermal_node=$HW_THERMAL_OF_NODE
 	local old_cooling=$HW_COOLING old_fan_node=$HW_FAN_OF_NODE old_tach=$HW_TACH
 	local old_error=$HW_DISCOVERY_ERROR old_available=$POLICY_AVAILABLE
+	local old_wifi_sensors=$HW_WIFI_SENSORS old_wifi_readings=$HW_WIFI_READINGS
+	local old_wifi_temperature=$HW_WIFI_TEMPERATURE_MILLIC old_wifi_source=$HW_WIFI_TEMPERATURE_SOURCE
+	local old_wifi_state=$HW_WIFI_STATE
 	local old_levels=$POLICY_LEVELS old_points=$POLICY_POINTS old_max=$POLICY_MAX_STATE
 	local old_direction=$POLICY_DIRECTION old_full=$POLICY_FULL_PWM
 	local old_policy_state=$POLICY_STATE old_floor=$POLICY_FLOOR_PWM old_floor_demand=$POLICY_FLOOR_DEMAND
@@ -20,6 +23,11 @@ hardware_policy_refresh()
 	HW_FAN_OF_NODE=$old_fan_node
 	HW_TACH=$old_tach
 	HW_DISCOVERY_ERROR=$old_error
+	HW_WIFI_SENSORS=$old_wifi_sensors
+	HW_WIFI_READINGS=$old_wifi_readings
+	HW_WIFI_TEMPERATURE_MILLIC=$old_wifi_temperature
+	HW_WIFI_TEMPERATURE_SOURCE=$old_wifi_source
+	HW_WIFI_STATE=$old_wifi_state
 	POLICY_AVAILABLE=$old_available
 	POLICY_LEVELS=$old_levels
 	POLICY_POINTS=$old_points

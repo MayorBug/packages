@@ -42,6 +42,7 @@ comments remain short and concrete.
 | `tach_enabled` | `0` or `1` | observation roles |
 | `temperature_filter` | `none` or `median` | Auto/Curve |
 | `temperature_filter_duration_s` | `5`, `10`, or `15` | median filter |
+| `wifi_source` | `off`, `auto`, or a supported MediaTek Wi-Fi hwmon name | optional monitoring and Auto/Curve |
 | `modem_source` | `off`, `qmanager_http`, `quectel_at` | Kernel/Auto/Curve |
 | `modem_http_host` | conservative hostname or IPv4 address | QManager HTTP |
 | `modem_at_device` | absolute `/dev/` TTY path | Quectel AT |
@@ -60,6 +61,14 @@ comments remain short and concrete.
 Numbers use a period as decimal separator and no suffix. Temperature config
 values use degrees Celsius and output config values use percentages. Curve
 temperatures strictly increase and outputs never decrease.
+
+### Wi-Fi hwmon temperature
+
+`wifi_source=off` preserves CPU/modem behavior. `auto` discovers supported
+MediaTek Wi-Fi hwmon names such as `mt7915_phy0` and uses the hottest readable
+radio. An exact stable hwmon name selects only that radio. Configuration never
+stores the changing `hwmonN` directory number. Wi-Fi is optional: an unavailable
+radio is reported and CPU control continues.
 
 ### QManager public HTTP
 

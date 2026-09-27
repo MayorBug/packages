@@ -83,6 +83,14 @@ grep -q "^pid_kp=$expected_kp$" "$target" || fail 'config install did not persis
 [ "$(stat -c %a "$target")" = 600 ] || fail 'installed config mode is not 0600'
 pass 'config install is canonical and mode 0600'
 
+sed 's/^wifi_source=.*/wifi_source=auto/' "$target" > "$target.tmp"
+mv "$target.tmp" "$target"
+revision=$(config_revision "$target")
+config_install "$TEST_TMP/partial.conf" "$revision" "$target" >/dev/null
+grep -q '^wifi_source=auto$' "$target" ||
+	fail 'older complete-config client disabled the additive Wi-Fi source'
+pass 'config install preserves additive Wi-Fi source for legacy clients'
+
 before_sum=$(md5sum "$target")
 if config_install "$DEFAULT_CONFIG" wrong-revision "$target" >/dev/null 2>&1; then
 	fail 'revision conflict unexpectedly installed candidate'

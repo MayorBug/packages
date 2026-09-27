@@ -26,6 +26,7 @@ ACTIVE_FAULT=none
 HISTORY_STATE=healthy
 HISTORY_NEXT_UPTIME=0
 HARDWARE_NEXT_DISCOVERY=0
+WIFI_NEXT_DISCOVERY=0
 KERNEL_MONITOR_ONLY=0
 SNAP_TIMESTAMP=0
 SNAP_UPDATED_UPTIME=0
@@ -188,12 +189,13 @@ telemetry_with_rediscovery()
 
 control_step()
 {
-	local now cpu selected filtered modem=null selected_source=cpu
+	local now cpu selected filtered wifi=null modem=null selected_source=cpu
 	local requested_pwm= requested_demand= effective_pwm= effective_demand= expected_pwm= actual_demand=
 	local raw=null rpm=null state=running reason=none full_output=1
-	local previous_fan previous_modem
+	local previous_fan previous_wifi previous_modem
 	SELECTED_TEMPERATURE_SOURCE=null
 	now=$(read_uptime) || return 1
+	previous_wifi=${HW_WIFI_STATE:-disabled}
 	if ! telemetry_with_rediscovery "$now" || [ -z "$HW_CPU_TEMPERATURE_MILLIC" ]; then
 		if [ "$ACTIVE_MODE" = kernel ]; then
 			full_output=0
@@ -211,6 +213,21 @@ control_step()
 	fi
 	cpu=$HW_CPU_TEMPERATURE_MILLIC
 	selected=$cpu
+	if [ "$CFG_WIFI_SOURCE" != off ]; then
+		if [ "$WIFI_NEXT_DISCOVERY" -eq 0 ] || [ "$now" -ge "$WIFI_NEXT_DISCOVERY" ]; then
+			hardware_wifi_discover || true
+			hardware_wifi_read || true
+			WIFI_NEXT_DISCOVERY=$((now + 10))
+		fi
+		if [ "$HW_WIFI_STATE" = available ]; then
+			wifi=$HW_WIFI_TEMPERATURE_MILLIC
+			case $ACTIVE_MODE in auto|curve)
+				if [ "$wifi" -gt "$selected" ]; then
+					selected=$wifi; selected_source="wifi:$HW_WIFI_TEMPERATURE_SOURCE"
+				fi ;;
+			esac
+		fi
+	fi
 	previous_modem=$MODEM_STATE
 	if modem_sample_read "$now"; then
 		modem=$MODEM_TEMPERATURE_MILLIC
@@ -225,6 +242,15 @@ control_step()
 		status_write_tracked || true
 		history_record_if_due "$now" || true
 		return 0
+	fi
+	if [ "$previous_wifi" != available ] && [ "$HW_WIFI_STATE" = available ]; then
+		if [ "$previous_wifi" = unavailable ] || [ "$previous_wifi" = ambiguous ]; then
+			log_event info wifi_temperature_recovered "source=$HW_WIFI_TEMPERATURE_SOURCE temperature_millic=$HW_WIFI_TEMPERATURE_MILLIC"
+		else
+			log_event info wifi_temperature_available "source=$HW_WIFI_TEMPERATURE_SOURCE temperature_millic=$HW_WIFI_TEMPERATURE_MILLIC"
+		fi
+	elif [ "$previous_wifi" = available ] && [ "$HW_WIFI_STATE" != available ]; then
+		log_event warning wifi_temperature_unavailable "source=$CFG_WIFI_SOURCE fallback=cpu"
 	fi
 	if [ "$previous_modem" = waiting ] && [ "$MODEM_STATE" = available ]; then
 		log_event info modem_temperature_available "source=$CFG_MODEM_SOURCE temperature_millic=$MODEM_TEMPERATURE_MILLIC"
@@ -298,8 +324,9 @@ handle_stop() { STOP_REQUESTED=1; }
 reload_config()
 {
 	local previous_mode previous_manual_timeout previous_config previous_hwmon_name previous_thermal_zone
-	local old_pid old_filter old_curve old_modem old_fan old_paths
+	local old_pid old_filter old_curve old_wifi_config old_modem old_fan old_paths
 	local old_hwmon old_hwmon_device old_thermal old_thermal_node old_cooling old_fan_node old_tach old_discovery
+	local old_wifi_sensors old_wifi_readings old_wifi_temperature old_wifi_source old_wifi_state
 	local old_policy_available old_policy_levels old_policy_points old_policy_max old_policy_direction old_policy_full
 	local old_policy_state old_policy_floor old_policy_floor_demand
 	local now candidate_mode
@@ -310,6 +337,7 @@ reload_config()
 	old_pid="$CFG_PID_TARGET_C|$CFG_PID_KP|$CFG_PID_KI|$CFG_PID_KD|$CFG_PID_INTEGRAL_LIMIT"
 	old_filter="$CFG_TEMPERATURE_FILTER|$CFG_TEMPERATURE_FILTER_DURATION_S|$CFG_CONTROL_INTERVAL_S"
 	old_curve="$CFG_CURVE_STYLE|$CFG_CURVE_HYSTERESIS_C|$CFG_CURVE_POINTS"
+	old_wifi_config=$CFG_WIFI_SOURCE
 	old_modem="$CFG_MODE|$CFG_MODEM_SOURCE|$CFG_MODEM_HTTP_HOST|$CFG_MODEM_AT_DEVICE|$CFG_MODEM_INTERVAL_S"
 	old_fan="$CFG_MODE|$CFG_TACH_ENABLED|$CFG_HWMON_NAME|$CFG_THERMAL_ZONE"
 	old_paths="$HW_HWMON|$HW_THERMAL|$HW_COOLING"
@@ -317,6 +345,9 @@ reload_config()
 	old_thermal=$HW_THERMAL; old_thermal_node=$HW_THERMAL_OF_NODE
 	old_cooling=$HW_COOLING; old_fan_node=$HW_FAN_OF_NODE; old_tach=$HW_TACH
 	old_discovery=$HW_DISCOVERY_ERROR
+	old_wifi_sensors=$HW_WIFI_SENSORS; old_wifi_readings=$HW_WIFI_READINGS
+	old_wifi_temperature=$HW_WIFI_TEMPERATURE_MILLIC; old_wifi_source=$HW_WIFI_TEMPERATURE_SOURCE
+	old_wifi_state=$HW_WIFI_STATE
 	old_policy_available=$POLICY_AVAILABLE; old_policy_levels=$POLICY_LEVELS
 	old_policy_points=$POLICY_POINTS; old_policy_max=$POLICY_MAX_STATE
 	old_policy_direction=$POLICY_DIRECTION; old_policy_full=$POLICY_FULL_PWM
@@ -338,6 +369,18 @@ reload_config()
 		disabled) ;;
 		*) refresh_hardware || {
 			restore_active_config "$previous_config" || return 1
+			HW_HWMON=$old_hwmon; HW_HWMON_DEVICE=$old_hwmon_device
+			HW_THERMAL=$old_thermal; HW_THERMAL_OF_NODE=$old_thermal_node
+			HW_COOLING=$old_cooling; HW_FAN_OF_NODE=$old_fan_node; HW_TACH=$old_tach
+			HW_DISCOVERY_ERROR=$old_discovery
+			HW_WIFI_SENSORS=$old_wifi_sensors; HW_WIFI_READINGS=$old_wifi_readings
+			HW_WIFI_TEMPERATURE_MILLIC=$old_wifi_temperature
+			HW_WIFI_TEMPERATURE_SOURCE=$old_wifi_source; HW_WIFI_STATE=$old_wifi_state
+			POLICY_AVAILABLE=$old_policy_available; POLICY_LEVELS=$old_policy_levels
+			POLICY_POINTS=$old_policy_points; POLICY_MAX_STATE=$old_policy_max
+			POLICY_DIRECTION=$old_policy_direction; POLICY_FULL_PWM=$old_policy_full
+			POLICY_STATE=$old_policy_state; POLICY_FLOOR_PWM=$old_policy_floor
+			POLICY_FLOOR_DEMAND=$old_policy_floor_demand
 			log_event warning configuration_reload_rejected 'reason=hardware_discovery'
 			return 1
 		} ;;
@@ -351,6 +394,9 @@ reload_config()
 			HW_THERMAL=$old_thermal; HW_THERMAL_OF_NODE=$old_thermal_node
 			HW_COOLING=$old_cooling; HW_FAN_OF_NODE=$old_fan_node; HW_TACH=$old_tach
 			HW_DISCOVERY_ERROR=$old_discovery
+			HW_WIFI_SENSORS=$old_wifi_sensors; HW_WIFI_READINGS=$old_wifi_readings
+			HW_WIFI_TEMPERATURE_MILLIC=$old_wifi_temperature
+			HW_WIFI_TEMPERATURE_SOURCE=$old_wifi_source; HW_WIFI_STATE=$old_wifi_state
 			POLICY_AVAILABLE=$old_policy_available; POLICY_LEVELS=$old_policy_levels
 			POLICY_POINTS=$old_policy_points; POLICY_MAX_STATE=$old_policy_max
 			POLICY_DIRECTION=$old_policy_direction; POLICY_FULL_PWM=$old_policy_full
@@ -368,9 +414,14 @@ reload_config()
 					HW_THERMAL=$old_thermal; HW_THERMAL_OF_NODE=$old_thermal_node
 					HW_COOLING=$old_cooling; HW_FAN_OF_NODE=$old_fan_node; HW_TACH=$old_tach
 					HW_DISCOVERY_ERROR=$old_discovery
+					HW_WIFI_SENSORS=$old_wifi_sensors; HW_WIFI_READINGS=$old_wifi_readings
+					HW_WIFI_TEMPERATURE_MILLIC=$old_wifi_temperature
+					HW_WIFI_TEMPERATURE_SOURCE=$old_wifi_source; HW_WIFI_STATE=$old_wifi_state
 					POLICY_AVAILABLE=$old_policy_available; POLICY_LEVELS=$old_policy_levels
 					POLICY_POINTS=$old_policy_points; POLICY_MAX_STATE=$old_policy_max
+					POLICY_DIRECTION=$old_policy_direction; POLICY_FULL_PWM=$old_policy_full
 					POLICY_STATE=$old_policy_state; POLICY_FLOOR_PWM=$old_policy_floor
+					POLICY_FLOOR_DEMAND=$old_policy_floor_demand
 					write_full_output
 					log_event error kernel_handoff_failed
 					return 1
@@ -385,6 +436,11 @@ reload_config()
 		[ "$old_pid" = "$CFG_PID_TARGET_C|$CFG_PID_KP|$CFG_PID_KI|$CFG_PID_KD|$CFG_PID_INTEGRAL_LIMIT" ] || pid_reset
 		[ "$old_filter" = "$CFG_TEMPERATURE_FILTER|$CFG_TEMPERATURE_FILTER_DURATION_S|$CFG_CONTROL_INTERVAL_S" ] || temperature_filter_reset
 		[ "$old_curve" = "$CFG_CURVE_STYLE|$CFG_CURVE_HYSTERESIS_C|$CFG_CURVE_POINTS" ] || curve_reset
+		if [ "$old_wifi_config" != "$CFG_WIFI_SOURCE" ]; then
+			temperature_filter_reset
+			pid_reset
+			curve_reset
+		fi
 	fi
 	if [ "$ACTIVE_MODE" = manual ]; then
 		if [ "$previous_mode" != manual ] || [ "$previous_manual_timeout" != "$CFG_MANUAL_TIMEOUT_MIN" ]; then
@@ -404,6 +460,7 @@ reload_config()
 		fan_watch_reset
 	fi
 	HARDWARE_NEXT_DISCOVERY=0
+	WIFI_NEXT_DISCOVERY=0
 	log_event info configuration_reloaded "mode=$ACTIVE_MODE previous_mode=$previous_mode"
 	case $ACTIVE_MODE in
 		kernel)

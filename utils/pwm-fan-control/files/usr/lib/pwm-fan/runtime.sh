@@ -6,9 +6,30 @@ snapshot_set()
 	SNAP_STATE=$1; SNAP_REASON=$2; SNAP_CPU=$3; SNAP_SELECTED=$4; SNAP_FILTERED=$5
 	SNAP_MODEM=$6; SNAP_REQUESTED_PWM=$7; SNAP_EFFECTIVE_PWM=$8
 	SNAP_ACTUAL_PWM=$9; SNAP_RPM=${10}
+	SNAP_WIFI=${HW_WIFI_TEMPERATURE_MILLIC:-null}
+	SNAP_WIFI_SOURCE=${HW_WIFI_TEMPERATURE_SOURCE:-null}
 	SNAP_SELECTED_SOURCE=${SELECTED_TEMPERATURE_SOURCE:-null}
 	SNAP_TIMESTAMP=$(date +%s 2>/dev/null || printf "0\n")
 	SNAP_UPDATED_UPTIME=$(read_uptime 2>/dev/null || printf "0\n")
+}
+
+wifi_sensors_json()
+{
+	local record name value first=1 selected=false
+	printf '['
+	while IFS= read -r record || [ -n "$record" ]; do
+		[ -n "$record" ] || continue
+		name=${record%%|*}; value=${record#*|}
+		[ "$name" = "${HW_WIFI_TEMPERATURE_SOURCE:-}" ] && selected=true || selected=false
+		[ "$first" -eq 1 ] || printf ','
+		printf '{"name":"%s","temperature_millic":%s,"available":%s,"selected":%s}' \
+			"$(printf '%s' "$name" | json_escape)" "$value" \
+			"$([ "$value" != null ] && printf true || printf false)" "$selected"
+		first=0
+	done <<EOF
+${HW_WIFI_READINGS:-}
+EOF
+	printf ']'
 }
 
 status_write()
@@ -27,6 +48,7 @@ status_write()
 		tach_read_error) monitoring_state=warning; monitoring_code=tach_read_error ;;
 	esac
 	if [ "$monitoring_state" = healthy ] && [ "$hardware_state" = error ]; then monitoring_state=error; monitoring_code=$SNAP_REASON; fi
+	if [ "$monitoring_state" = healthy ] && [ "${CFG_WIFI_SOURCE:-off}" != off ] && [ "${HW_WIFI_STATE:-disabled}" != available ]; then monitoring_state=warning; monitoring_code=wifi_unavailable; fi
 	if [ "$monitoring_state" = healthy ] && [ "$MODEM_STATE" = lost ]; then monitoring_state=warning; monitoring_code=modem_unavailable; fi
 	if [ "$HISTORY_STATE" = error ]; then history_health=error; history_code=history_write_failed; fi
 	if [ "$active_mode" = auto ] && is_uint "$SNAP_FILTERED"; then
@@ -51,6 +73,7 @@ status_write()
 		printf "  \"temperature_filter\":\"%s\",\n" "$CFG_TEMPERATURE_FILTER"
 		printf "  \"temperature_filter_duration_s\":%s,\n" "$CFG_TEMPERATURE_FILTER_DURATION_S"
 		printf "  \"tach_enabled\":%s,\n" "$([ "$CFG_TACH_ENABLED" = 1 ] && printf true || printf false)"
+		printf "  \"wifi_source\":\"%s\",\n" "$(printf '%s' "${CFG_WIFI_SOURCE:-off}" | json_escape)"
 		printf "  \"modem_source\":\"%s\",\n" "$CFG_MODEM_SOURCE"
 		printf "  \"modem_http_host\":\"%s\",\n" "$(printf '%s' "$CFG_MODEM_HTTP_HOST" | json_escape)"
 		printf "  \"modem_at_device\":\"%s\",\n" "$(printf '%s' "$CFG_MODEM_AT_DEVICE" | json_escape)"
@@ -65,6 +88,14 @@ status_write()
 		printf "  \"control_reason\":\"%s\",\n" "$(printf "%s" "$SNAP_REASON" | json_escape)"
 		printf "  \"history_state\":\"%s\",\n" "$HISTORY_STATE"
 		printf "  \"cpu_temperature_millic\":%s,\n" "$SNAP_CPU"
+		printf "  \"wifi_temperature_millic\":%s,\n" "${SNAP_WIFI:-null}"
+		if [ "${SNAP_WIFI_SOURCE:-null}" = null ]; then
+			printf "  \"wifi_temperature_source\":null,\n"
+		else
+			printf "  \"wifi_temperature_source\":\"%s\",\n" "$(printf '%s' "$SNAP_WIFI_SOURCE" | json_escape)"
+		fi
+		printf "  \"wifi_state\":\"%s\",\n" "${HW_WIFI_STATE:-disabled}"
+		printf "  \"wifi_sensors\":"; wifi_sensors_json; printf ',\n'
 		printf "  \"modem_temperature_millic\":%s,\n" "$SNAP_MODEM"
 		printf "  \"selected_temperature_millic\":%s,\n" "$SNAP_SELECTED"
 		if [ "$SNAP_SELECTED_SOURCE" = null ]; then
@@ -132,28 +163,39 @@ history_append_snapshot()
 		history_lock_release
 		return 1
 	}
-	if ! printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+	if ! printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
 		"$SNAP_TIMESTAMP" "$mode" "$SNAP_CPU" "$SNAP_MODEM" \
 		"$SNAP_REQUESTED_PWM" "${POLICY_FLOOR_PWM:-null}" "$SNAP_EFFECTIVE_PWM" \
-		"$SNAP_ACTUAL_PWM" "$SNAP_RPM" "$FANWATCH_STATE" >> "$HISTORY_FILE"; then
+		"$SNAP_ACTUAL_PWM" "$SNAP_RPM" "$FANWATCH_STATE" "${SNAP_WIFI:-null}" \
+		"${SNAP_SELECTED_SOURCE:-null}" >> "$HISTORY_FILE"; then
 		history_lock_release
 		return 1
 	fi
 	total=$(wc -l < "$HISTORY_FILE" 2>/dev/null || printf '0\n')
 	valid=$(awk -F '\t' '
-		NF == 10 && $1 ~ /^[0-9]+$/ && $2 ~ /^(kernel|auto|curve|manual)$/ &&
-		$3 ~ /^(null|[0-9]+)$/ && $4 ~ /^(null|[0-9]+)$/ &&
-		$5 ~ /^(null|[0-9]+)$/ && $6 ~ /^(null|[0-9]+)$/ &&
-		$7 ~ /^(null|[0-9]+)$/ && $8 ~ /^(null|[0-9]+)$/ &&
-		$9 ~ /^(null|[0-9]+)$/ && $10 ~ /^[a-z_]+$/ { count++ }
+		function base_ok() {
+			return $1 ~ /^[0-9]+$/ && $2 ~ /^(kernel|auto|curve|manual)$/ &&
+				$3 ~ /^(null|[0-9]+)$/ && $4 ~ /^(null|[0-9]+)$/ &&
+				$5 ~ /^(null|[0-9]+)$/ && $6 ~ /^(null|[0-9]+)$/ &&
+				$7 ~ /^(null|[0-9]+)$/ && $8 ~ /^(null|[0-9]+)$/ &&
+				$9 ~ /^(null|[0-9]+)$/ && $10 ~ /^[a-z_]+$/
+		}
+		(NF == 10 && base_ok()) || (NF == 12 && base_ok() &&
+			$11 ~ /^(null|[0-9]+)$/ &&
+			$12 ~ /^(null|cpu|modem|wifi:[A-Za-z0-9_.-]+)$/) { count++ }
 		END { print count + 0 }' "$HISTORY_FILE" 2>/dev/null || printf '0\n')
 	if [ "$total" -gt 1440 ] || [ "$valid" -ne "$total" ]; then
 		if ! awk -F '\t' '
-			NF == 10 && $1 ~ /^[0-9]+$/ && $2 ~ /^(kernel|auto|curve|manual)$/ &&
-			$3 ~ /^(null|[0-9]+)$/ && $4 ~ /^(null|[0-9]+)$/ &&
-			$5 ~ /^(null|[0-9]+)$/ && $6 ~ /^(null|[0-9]+)$/ &&
-			$7 ~ /^(null|[0-9]+)$/ && $8 ~ /^(null|[0-9]+)$/ &&
-			$9 ~ /^(null|[0-9]+)$/ && $10 ~ /^[a-z_]+$/ { print }' \
+			function base_ok() {
+				return $1 ~ /^[0-9]+$/ && $2 ~ /^(kernel|auto|curve|manual)$/ &&
+					$3 ~ /^(null|[0-9]+)$/ && $4 ~ /^(null|[0-9]+)$/ &&
+					$5 ~ /^(null|[0-9]+)$/ && $6 ~ /^(null|[0-9]+)$/ &&
+					$7 ~ /^(null|[0-9]+)$/ && $8 ~ /^(null|[0-9]+)$/ &&
+					$9 ~ /^(null|[0-9]+)$/ && $10 ~ /^[a-z_]+$/
+			}
+			(NF == 10 && base_ok()) || (NF == 12 && base_ok() &&
+				$11 ~ /^(null|[0-9]+)$/ &&
+				$12 ~ /^(null|cpu|modem|wifi:[A-Za-z0-9_.-]+)$/) { print }' \
 			"$HISTORY_FILE" | tail -n 1440 > "$normalized" ||
 			! atomic_replace "$HISTORY_FILE" 0600 < "$normalized"; then
 			rm -f "$normalized"

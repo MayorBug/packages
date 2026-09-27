@@ -39,6 +39,13 @@ sed 's/^temperature_filter_duration_s=.*/temperature_filter_duration_s=6/' "$dis
 expect_failure "$CONTROLLER" validate -c "$duration" --json
 pass 'unsupported median filter duration is rejected'
 
+wifi=$TEST_TMP/wifi-source.conf
+sed 's/^wifi_source=.*/wifi_source=nvme/' "$disabled" > "$wifi"
+expect_failure "$CONTROLLER" validate -c "$wifi" --json
+sed 's/^wifi_source=.*/wifi_source=mt7915_phy0x/' "$disabled" > "$wifi"
+expect_failure "$CONTROLLER" validate -c "$wifi" --json
+pass 'unsupported exact Wi-Fi hwmon names are rejected'
+
 obsolete=$TEST_TMP/obsolete-samples.conf
 cp "$disabled" "$obsolete"
 printf 'temperature_samples=5\n' >> "$obsolete"
