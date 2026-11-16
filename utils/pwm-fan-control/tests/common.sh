@@ -44,3 +44,5 @@ assert_eq "$(percent_to_pwm 100)" 255 'full output maps to raw 255'
 expect_failure percent_to_pwm 101
 
 pass 'common helper contract'
+expect_failure percent_to_pwm 08
+expect_failure percent_to_pwm 010

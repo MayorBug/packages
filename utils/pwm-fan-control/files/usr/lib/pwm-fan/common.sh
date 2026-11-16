@@ -87,10 +87,16 @@ json_escape()
 	}'
 }
 
+is_decimal_uint()
+{
+	is_uint "$1" || return 1
+	case $1 in 0[0-9]*) return 1 ;; esac
+}
+
 percent_to_pwm()
 {
 	local percent=${1:-}
-	is_uint "$percent" || return 1
+	is_decimal_uint "$percent" || return 1
 	[ "$percent" -le 100 ] || return 1
 	printf '%s\n' $(((percent * 255 + 50) / 100))
 }

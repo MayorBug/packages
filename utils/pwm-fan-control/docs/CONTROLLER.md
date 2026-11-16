@@ -98,11 +98,16 @@ invalid or unapplied.
 Control to Kernel evaluates and applies one handoff, resets control-only state,
 then continues in read-only observe role.
 
-Kernel to control confirms writable PWM, resets relevant control state, and
-begins control on the next cycle.
+Kernel to control resets relevant state and attempts verified PWM application on the next cycle.
+A successful policy refresh also clears the startup monitoring fallback.
 
 Active to Disabled performs handoff when leaving control, removes status and
 lock, and exits.
+
+If you enable modem monitoring after it was off, restart the service to create its sampler.
+If you enable it again after a sampler exits, restart the service again.
+Use `/etc/init.d/pwm-fan-control restart` on the router. A reload only signals existing processes.
+LuCI restarts the service when modem configuration changes.
 
 ## Stop and crash behavior
 
@@ -286,8 +291,8 @@ temperature and enforces the DTS floor.
 
 At timeout:
 
-1. call `config-set mode kernel`
-2. perform policy handoff
+1. perform policy handoff
+2. call `config-set mode kernel`
 3. transition directly to Kernel observe role.
 
 If the config write fails, remain in the current safe Manual role and report

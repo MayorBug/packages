@@ -142,3 +142,18 @@ grep -q '^temperature_filter=median$' "$legacy" || fail 'upgrade did not reset t
 grep -q '^temperature_filter_duration_s=10$' "$legacy" || fail 'upgrade did not install the duration default'
 ! grep -q '^temperature_samples=' "$legacy" || fail 'upgrade retained the obsolete sample count'
 pass 'version 1 upgrade resets only temperature filter settings'
+
+for entry in 'control_interval_s:08' 'manual_output_percent:08' 'manual_output_percent:010' \
+	'manual_timeout_min:010' 'modem_interval_s:010' 'pid_target_c:055' 'pid_kp:00.1'; do
+	key=${entry%%:*}; value=${entry#*:}
+	config_defaults
+	config_set_value "$key" "$value"
+	expect_failure config_validate
+	pass "leading-zero value rejected for $key: $value"
+done
+for points in '040:0,60:100' '40:08,60:100' '40:010,60:100'; do
+	config_defaults
+	CFG_CURVE_POINTS=$points
+	expect_failure config_validate
+	pass "leading-zero curve pair rejected: $points"
+done

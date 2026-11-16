@@ -17,6 +17,8 @@ TEST_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 "$TEST_DIR/event_logging.sh"
 sh "$TEST_DIR/runtime_health.sh"
 "$TEST_DIR/lifecycle_modes.sh"
+sh "$TEST_DIR/fallback_recovery.sh"
 "$TEST_DIR/lifecycle_modem.sh"
 "$TEST_DIR/lifecycle_wifi.sh"
 "$TEST_DIR/lifecycle_reload.sh"
+sh "$TEST_DIR/reload_rollback.sh"

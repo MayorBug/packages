@@ -71,3 +71,21 @@ PWM_FAN_LOGGER=: "$CONTROLLER" config-upgrade
 pass 'config-upgrade canonicalizes legacy format-2 Wi-Fi default'
 
 pass 'configuration CLI contract'
+
+sed -e 's/^pid_target_c=.*/pid_target_c=055/' \
+	-e 's/^manual_output_percent=.*/manual_output_percent=08/' \
+	"$DEFAULT_CONFIG" > "$TEST_TMP/leading-zero.conf"
+if "$CONTROLLER" validate -c "$TEST_TMP/leading-zero.conf" --json > "$TEST_TMP/leading-zero.json"; then
+	fail 'leading-zero configuration returned success'
+fi
+python3 - "$TEST_TMP/leading-zero.json" <<'PY'
+import json, pathlib, sys
+document = json.loads(pathlib.Path(sys.argv[1]).read_text())
+assert document['valid'] is False
+for key, value in [('pid_target_c', '055'), ('manual_output_percent', '08')]:
+    assert document['raw_values'][key] == value
+    assert document['effective_values'][key] is None
+    assert any(item['key'] == key and item['code'] == 'invalid_value'
+               for item in document['diagnostics'])
+PY
+pass 'leading-zero values return valid JSON diagnostics before activation'

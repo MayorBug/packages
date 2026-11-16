@@ -100,6 +100,13 @@ policy_find_trip_node()
 
 policy_build()
 {
+	if policy_build_candidate; then return 0; fi
+	policy_state_reset
+	return 1
+}
+
+policy_build_candidate()
+{
 	local file fan_phandle map cells minimum maximum state trip_phandle trip_node
 	local temperature hysteresis release pwm raw_points= count=0 actual_max point previous_state=-1 normalized=
 	local previous_level= direction= equal_levels=1

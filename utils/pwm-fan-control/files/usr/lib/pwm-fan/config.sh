@@ -238,8 +238,8 @@ config_parse()
 config_uint_range()
 {
 	local key=$1 value=$2 minimum=$3 maximum=$4
-	if ! is_uint "$value" || [ "$value" -lt "$minimum" ] || [ "$value" -gt "$maximum" ]; then
-		config_diag error invalid_value "$key" 0 "$value" "$(config_default "$key")" "Expected integer $minimum-$maximum."
+	if ! is_decimal_uint "$value" || [ "$value" -lt "$minimum" ] || [ "$value" -gt "$maximum" ]; then
+		config_diag error invalid_value "$key" 0 "$value" "$(config_default "$key")" "Expected decimal integer $minimum-$maximum without leading zeros."
 		return 1
 	fi
 }
@@ -248,9 +248,9 @@ config_number_range()
 {
 	local key=$1 value=$2 minimum=$3 maximum=$4
 	if ! printf '%s\n' "$value" | awk -v min="$minimum" -v max="$maximum" '
-		$0 ~ /^[0-9]+([.][0-9]+)?$/ && $0 + 0 >= min && $0 + 0 <= max { ok=1 }
+		$0 ~ /^(0|[1-9][0-9]*)([.][0-9]+)?$/ && $0 + 0 >= min && $0 + 0 <= max { ok=1 }
 		END { exit !ok }'; then
-		config_diag error invalid_value "$key" 0 "$value" "$(config_default "$key")" "Expected number $minimum-$maximum."
+		config_diag error invalid_value "$key" 0 "$value" "$(config_default "$key")" "Expected decimal number $minimum-$maximum without leading zeros."
 		return 1
 	fi
 }
@@ -263,7 +263,7 @@ config_validate_points()
 	for point in "$@"; do
 		case $point in *:*:*) count=99; break ;; *:*) ;; *) count=99; break ;; esac
 		temperature=${point%%:*}; percent=${point#*:}
-		if ! is_uint "$temperature" || ! is_uint "$percent" ||
+		if ! is_decimal_uint "$temperature" || ! is_decimal_uint "$percent" ||
 			[ "$temperature" -lt 20 ] || [ "$temperature" -gt 125 ] ||
 			[ "$percent" -gt 100 ] || [ "$temperature" -le "$previous_t" ] ||
 			[ "$percent" -lt "$previous_p" ]; then count=99; break; fi

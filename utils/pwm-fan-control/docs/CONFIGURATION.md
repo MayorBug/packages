@@ -18,6 +18,10 @@ The format is intentionally small:
 The file is always parsed as data. It is never sourced, evaluated, or passed to
 a shell as executable text.
 
+Integer values use decimal digits without leading zeros, except for `0` itself.
+Decimal values follow the same rule before the decimal point.
+Curve temperatures and percentages follow the integer rule.
+
 ## Canonical defaults
 
 `config_defaults()` in the controller package is the sole runtime authority
@@ -153,7 +157,9 @@ the complete previous hardware and policy snapshot.
 
 Changes to `hwmon_name` or `thermal_zone` require a service restart. Save can
 store these changes without changing the running daemon. Save & Apply must
-restart the service. All other accepted non-Disabled changes use reload.
+restart the service. If modem monitoring needs a sampler that is not running, restart the service to create it.
+LuCI also restarts the service when modem configuration changes.
+Other accepted non-Disabled changes use reload.
 
 ### Structural error
 

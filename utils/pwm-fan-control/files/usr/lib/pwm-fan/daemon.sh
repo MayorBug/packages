@@ -321,6 +321,24 @@ control_step()
 handle_hup() { RELOAD_REQUESTED=1; }
 handle_stop() { STOP_REQUESTED=1; }
 
+# The saved variables belong to reload_config's local scope.
+restore_reload_state()
+{
+	restore_active_config "$previous_config" || return 1
+	HW_HWMON=$old_hwmon; HW_HWMON_DEVICE=$old_hwmon_device
+	HW_THERMAL=$old_thermal; HW_THERMAL_OF_NODE=$old_thermal_node
+	HW_COOLING=$old_cooling; HW_FAN_OF_NODE=$old_fan_node; HW_TACH=$old_tach
+	HW_DISCOVERY_ERROR=$old_discovery
+	HW_WIFI_SENSORS=$old_wifi_sensors; HW_WIFI_READINGS=$old_wifi_readings
+	HW_WIFI_TEMPERATURE_MILLIC=$old_wifi_temperature
+	HW_WIFI_TEMPERATURE_SOURCE=$old_wifi_source; HW_WIFI_STATE=$old_wifi_state
+	POLICY_AVAILABLE=$old_policy_available; POLICY_LEVELS=$old_policy_levels
+	POLICY_POINTS=$old_policy_points; POLICY_MAX_STATE=$old_policy_max
+	POLICY_DIRECTION=$old_policy_direction; POLICY_FULL_PWM=$old_policy_full
+	POLICY_STATE=$old_policy_state; POLICY_FLOOR_PWM=$old_policy_floor
+	POLICY_FLOOR_DEMAND=$old_policy_floor_demand
+}
+
 reload_config()
 {
 	local previous_mode previous_manual_timeout previous_config previous_hwmon_name previous_thermal_zone
@@ -368,19 +386,7 @@ reload_config()
 	case $CFG_MODE in
 		disabled) ;;
 		*) refresh_hardware || {
-			restore_active_config "$previous_config" || return 1
-			HW_HWMON=$old_hwmon; HW_HWMON_DEVICE=$old_hwmon_device
-			HW_THERMAL=$old_thermal; HW_THERMAL_OF_NODE=$old_thermal_node
-			HW_COOLING=$old_cooling; HW_FAN_OF_NODE=$old_fan_node; HW_TACH=$old_tach
-			HW_DISCOVERY_ERROR=$old_discovery
-			HW_WIFI_SENSORS=$old_wifi_sensors; HW_WIFI_READINGS=$old_wifi_readings
-			HW_WIFI_TEMPERATURE_MILLIC=$old_wifi_temperature
-			HW_WIFI_TEMPERATURE_SOURCE=$old_wifi_source; HW_WIFI_STATE=$old_wifi_state
-			POLICY_AVAILABLE=$old_policy_available; POLICY_LEVELS=$old_policy_levels
-			POLICY_POINTS=$old_policy_points; POLICY_MAX_STATE=$old_policy_max
-			POLICY_DIRECTION=$old_policy_direction; POLICY_FULL_PWM=$old_policy_full
-			POLICY_STATE=$old_policy_state; POLICY_FLOOR_PWM=$old_policy_floor
-			POLICY_FLOOR_DEMAND=$old_policy_floor_demand
+			restore_reload_state || return 1
 			log_event warning configuration_reload_rejected 'reason=hardware_discovery'
 			return 1
 		} ;;
@@ -389,19 +395,7 @@ reload_config()
 	case $candidate_mode in
 		kernel)
 			if [ "$previous_mode" != kernel ] && ! perform_handoff; then
-			restore_active_config "$previous_config" || return 1
-			HW_HWMON=$old_hwmon; HW_HWMON_DEVICE=$old_hwmon_device
-			HW_THERMAL=$old_thermal; HW_THERMAL_OF_NODE=$old_thermal_node
-			HW_COOLING=$old_cooling; HW_FAN_OF_NODE=$old_fan_node; HW_TACH=$old_tach
-			HW_DISCOVERY_ERROR=$old_discovery
-			HW_WIFI_SENSORS=$old_wifi_sensors; HW_WIFI_READINGS=$old_wifi_readings
-			HW_WIFI_TEMPERATURE_MILLIC=$old_wifi_temperature
-			HW_WIFI_TEMPERATURE_SOURCE=$old_wifi_source; HW_WIFI_STATE=$old_wifi_state
-			POLICY_AVAILABLE=$old_policy_available; POLICY_LEVELS=$old_policy_levels
-			POLICY_POINTS=$old_policy_points; POLICY_MAX_STATE=$old_policy_max
-			POLICY_DIRECTION=$old_policy_direction; POLICY_FULL_PWM=$old_policy_full
-			POLICY_STATE=$old_policy_state; POLICY_FLOOR_PWM=$old_policy_floor
-			POLICY_FLOOR_DEMAND=$old_policy_floor_demand
+			restore_reload_state || return 1
 			write_full_output
 			log_event error kernel_handoff_failed
 			return 1
@@ -409,19 +403,7 @@ reload_config()
 		disabled)
 			case $previous_mode in
 				auto|curve|manual) if ! perform_handoff; then
-					restore_active_config "$previous_config" || return 1
-					HW_HWMON=$old_hwmon; HW_HWMON_DEVICE=$old_hwmon_device
-					HW_THERMAL=$old_thermal; HW_THERMAL_OF_NODE=$old_thermal_node
-					HW_COOLING=$old_cooling; HW_FAN_OF_NODE=$old_fan_node; HW_TACH=$old_tach
-					HW_DISCOVERY_ERROR=$old_discovery
-					HW_WIFI_SENSORS=$old_wifi_sensors; HW_WIFI_READINGS=$old_wifi_readings
-					HW_WIFI_TEMPERATURE_MILLIC=$old_wifi_temperature
-					HW_WIFI_TEMPERATURE_SOURCE=$old_wifi_source; HW_WIFI_STATE=$old_wifi_state
-					POLICY_AVAILABLE=$old_policy_available; POLICY_LEVELS=$old_policy_levels
-					POLICY_POINTS=$old_policy_points; POLICY_MAX_STATE=$old_policy_max
-					POLICY_DIRECTION=$old_policy_direction; POLICY_FULL_PWM=$old_policy_full
-					POLICY_STATE=$old_policy_state; POLICY_FLOOR_PWM=$old_policy_floor
-					POLICY_FLOOR_DEMAND=$old_policy_floor_demand
+					restore_reload_state || return 1
 					write_full_output
 					log_event error kernel_handoff_failed
 					return 1
@@ -429,6 +411,7 @@ reload_config()
 			esac ;;
 	esac
 	ACTIVE_MODE=$candidate_mode
+	KERNEL_MONITOR_ONLY=0
 	now=$(read_uptime)
 	if [ "$previous_mode" != "$ACTIVE_MODE" ]; then
 		reset_control_state
